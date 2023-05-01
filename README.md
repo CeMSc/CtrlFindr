@@ -43,11 +43,11 @@ Open the CtrlFindr.ipynb file in Jupyter Notebook to start analyzing your text f
 
 # Usage
 
-    Place the text files you want to analyze in the TXT folder or adjust the file paths in the txt_to_dataframe() function.
-    Prepare the Assessment_framework.xlsx file containing the search strings, co-occurrences, document conditionals, and taxonomy as specified in the create_dataframes() function.
-    Customize the code to meet your specific requirements (e.g., update the stopword list, modify the keyword dictionary, etc.).
-    Execute the cells in the Jupyter Notebook in the order they appear.
-    The results will be saved as TSV files (codebook, codebook percentage, codebook boolean, and codebook sentiment) in the same directory as the Jupyter Notebook.
+- Place the text files you want to analyze in the TXT folder or adjust the file paths in the txt_to_dataframe() function.
+- Prepare the Assessment_framework.xlsx file containing the search strings, co-occurrences, document conditionals, and taxonomy as specified in the create_dataframes() function.
+- Customize the code to meet your specific requirements (e.g., update the stopword list, modify the keyword dictionary, etc.).
+- Execute the cells in the Jupyter Notebook in the order they appear.
+- The results will be saved as TSV files (codebook, codebook percentage, codebook boolean, and codebook sentiment) in the same directory as the Jupyter Notebook.
 
 # License
 
