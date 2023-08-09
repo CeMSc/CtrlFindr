@@ -6,12 +6,12 @@ In the coming months, I plan to provide a version of the code with a User Interf
 
 # Features
 
-- Text preprocessing (lowercase conversion, stopword removal, sentence splitting),
-- Keyword extraction and organization,
+- Text preprocessing (lowercase conversion, sentence splitting),
+- Keyword analysis,
 - Co-occurrence analysis,
 - Sentiment analysis (using VADER SentimentIntensityAnalyzer from nltk),
-- Customizable search strings and aggregation (to be filled in the provided Assessment_framework.xlsx template)
-- Export results to TSV files (aggregate results, results percentage of sentences within documents, boolean results, and sentiment analysis)
+- Customizable search strings for automating content analysis of natural language (to be filled in the provided Assessment_framework.xlsx template)
+- Export results to TSV files (number of positive findings per document, positive findings per document as booleans, positive findings as percentage of sentences within documents, and sentiment analysis of positive findings)
 
 # Dependencies
 
@@ -45,9 +45,11 @@ Open the CtrlFindr.ipynb file in Jupyter Notebook to start analyzing your text f
 
 - Place the text files you want to analyze in the TXT folder or adjust the file paths in the txt_to_dataframe() function.
 - Prepare the Assessment_framework.xlsx file containing the search strings, co-occurrences, document conditionals, and taxonomy as specified in the create_dataframes() function.
-- Customize the code to meet your specific requirements (e.g., update the stopword list, modify the keyword dictionary, etc.).
+- Customize the code to meet your specific requirements (e.g., utilize optional functions).
 - Execute the cells in the Jupyter Notebook in the order they appear.
-- The results will be saved as TSV files (codebook, codebook percentage, codebook boolean, and codebook sentiment) in the same directory as the Jupyter Notebook.
+- The results will be saved as TSV files (Output_PosCount.tsv, Output_PosCountBoolean.tsv, Output_PosPercent.tsv, Output_Sentiment.tsv, and Output_Sentences.tsv) in the same directory as the Jupyter Notebook.
+
+- Check the **Jupiter Notebook Example folder** for a sample analysis of two text files.
 
 # License
 
