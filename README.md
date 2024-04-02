@@ -10,7 +10,7 @@ In the coming months, I plan to provide a version of the code with a User Interf
 - Keyword analysis,
 - Co-occurrence analysis,
 - Sentiment analysis (using VADER SentimentIntensityAnalyzer from nltk),
-- Customizable search strings for automating content analysis of natural language (to be filled in the provided Assessment_framework.xlsx template)
+- Customizable search strings for automating content analysis of natural language (to be filled in the provided Assessment_framework.ots template)
 - Export results to TSV files (number of positive findings per document, positive findings per document as booleans, positive findings as percentage of sentences within documents, and sentiment analysis of positive findings)
 
 # Dependencies
@@ -32,24 +32,20 @@ Navigate to the CtrlFindr directory:
 cd CtrlFindr
 ```
 
-Install the required dependencies:
-```
-pip install -r requirements.txt
-```
 
-Fill the search strings and taxonomy in the Assessment_framework.xlsx
+Fill the search strings and taxonomy in the Assessment_framework.ots
 
 Open the CtrlFindr.ipynb file in Jupyter Notebook to start analyzing your text files.
 
 # Usage
 
 - Place the text files you want to analyze in the TXT folder or adjust the file paths in the txt_to_dataframe() function.
-- Prepare the Assessment_framework.xlsx file containing the search strings, co-occurrences, document conditionals, and taxonomy as specified in the create_dataframes() function.
+- Prepare the Assessment_framework.ots file containing the variables, search strings, co-occurrences, document conditionals, and taxonomy as specified in the create_dataframes() function.
 - Customize the code to meet your specific requirements (e.g., utilize optional functions).
 - Execute the cells in the Jupyter Notebook in the order they appear.
-- The results will be saved as TSV files (Output_PosCount.tsv, Output_PosCountBoolean.tsv, Output_PosPercent.tsv, Output_Sentiment.tsv, and Output_Sentences.tsv) in the same directory as the Jupyter Notebook.
+- The results will be saved as TSV files .
 
-- Check the **Jupiter Notebook Example folder** for a sample analysis of two text files.
+- Check the **Jupiter Notebook Example folder** for a sample analysis of few text files.
 
 # License
 
