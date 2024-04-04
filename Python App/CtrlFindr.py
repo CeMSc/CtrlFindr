@@ -1,23 +1,29 @@
-# contact contact {at} scartozzi [dot] eu if you need more info or help to run this code.
+# For additional information or assistance with running this code, please reach out to contact[at]scartozzi[dot]eu.
 # This code is released under GNU General Public License v3.0. Feel free to use it as you wish.
 
 import os
 import re
+import time
 import nltk
-import pyexcel_ods3
 import pandas as pd
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 sent_i = SentimentIntensityAnalyzer()
 
 # GLOBAL VARIABLES
+# specify the directory where the text files are stored:
 TEXT_FILES_DIRECTORY = "./Analysis/Text_files"
+# specify the directory where the assessment framework is stored:
 ASSESSMENT_FRAMEWORK_DIRECTORY = "./Analysis/Input/Assessment_framework.ods"
+# specify the directory where the results will be saved:
 OUTPUT_DIRECTORY = "./Analysis/Output"
+# choose the following settings:
 TEXT_CLEANING = True
-SENTIMENT_ANALYSIS = False
-AGGREGATE_VARIABLES = True
+SENTIMENT_ANALYSIS = True
+# choose what to export:
 EXPORT_SENTENCE_LEVEL_DATA = True
 EXPORT_DOCUMENT_DATA = True
+# estimate the time needed to run the code:
+PRINT_RUN_TIME = True
 
 # IMPORT TEXT FILES
 def txt_to_dataframe():
@@ -39,24 +45,33 @@ def txt_to_dataframe():
 
 # IMPORT ASSESSMENT FRAMEWORK
 def create_dataframes(ods_file):
-    ods = pyexcel_ods3.get_data(ods_file)
-    variables = process_dataframe(ods['variables'])
-    variables['variable number'] = variables['variable number'].astype(int)
-    set_search_strings = process_dataframe(ods['search_strings'])
-    set_co_occurrences = process_dataframe(ods['co_occurrences'])
-    set_doc_conditionals = process_dataframe(ods['doc_conditionals'])
-    set_keywords = process_dataframe(ods['taxonomy'], drop_na=False)
+    variables = process_dataframe(pd.read_excel(ods_file, sheet_name='variables', engine='odf'))
+    set_search_strings = process_dataframe(pd.read_excel(ods_file, sheet_name='search_strings', engine='odf'))
+    set_co_occurrences = process_dataframe(pd.read_excel(ods_file, sheet_name='co_occurrences', engine='odf'))
+    set_doc_conditionals = process_dataframe(pd.read_excel(ods_file, sheet_name='doc_conditionals', engine='odf'))
+    set_keywords = process_dataframe(pd.read_excel(ods_file, sheet_name='taxonomy', engine='odf'), drop_na=False)
     return variables, set_search_strings, set_co_occurrences, set_doc_conditionals, set_keywords
 
 # Helper function to process the data from each sheet in the ODS file
-def process_dataframe(sheet_data, lowercase_columns=True, drop_na=True):
-    df = pd.DataFrame(sheet_data[1:], columns=sheet_data[0])
+def process_dataframe(df, lowercase_columns=True, drop_na=False):
     if lowercase_columns:
         df.columns = [convert_to_lowercase(col) for col in df.columns]
     df = df.applymap(convert_to_lowercase)
+    if 'query' in df.columns:
+        df['query'] = df['query'].apply(format_logical_expression)
     if drop_na:
         df = df.dropna()
     return df
+
+# Helper function to format logical expressions in the search strings' query column
+def format_logical_expression(expression):
+    if not isinstance(expression, str):
+        return expression
+    expression = re.sub(r"(?<![a-zA-Z])and(?![a-zA-Z])", " and ", expression)
+    expression = re.sub(r"(?<![a-zA-Z])or(?![a-zA-Z])", " or ", expression)
+    expression = re.sub(r"(?<![a-zA-Z])not(?![a-zA-Z])", " not ", expression)
+    expression = re.sub(r"\s+", " ", expression).strip()
+    return expression
 
 # Helper function to convert strings to lowercase
 def convert_to_lowercase(l):
@@ -69,17 +84,14 @@ def organize_keywords(df):
     cols = df.columns
     key_dict = {}
     for col in cols:
-        # Filter out empty strings and strings consisting only of whitespace
         values = [str(value).strip() for value in df[col].dropna() if str(value).strip()]
         key_dict[col.lower()] = values
     return key_dict
 
 # CLEAN TEXT
 def clean_text(df, content):
-    df[content] = df[content].apply(lambda text: re.sub(r'(\d+)$', r'\1.', text, flags=re.MULTILINE))
     df[content] = df[content].apply(lambda text: re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE))
     df[content] = df[content].apply(lambda text: re.sub(r'\.{2,}', '.', text))
-    df[content] = df[content].apply(lambda text: re.sub(r'\n\s*\n', '\n', text).strip())
     df[content] = df[content].apply(lambda text: re.sub(r'\n(?=[a-z])', ' ', text))
 
 # SPLIT TEXT INTO SENTENCES
@@ -162,7 +174,7 @@ def vadar_sentiment_analysis(text):
 def run_queries(df, set_search_strings):
     results = df.copy()
     for _, row in set_search_strings.iterrows():
-        variable, query = row['proxy'], row['query']
+        variable, query = row['query name'], row['query']
         # Convert AND, OR, NOT operations to their Python equivalents
         query = query.replace("AND", "and").replace("OR", "or").replace("NOT", "not")
         # Evaluate the query for each row in df
@@ -180,22 +192,21 @@ def evaluate_query(row, query):
         return False
 
 # AGGREGATE VARIABLES
-   
-def aggregate_and_rename_variables(results, variables):
+def define_variables(results, variables):
     for _, row in variables.iterrows():
         condition, threshold_str = row['aggregation query'].split('>')
-        threshold = int(threshold_str.strip())   
+        threshold = int(threshold_str.strip())
         child_vars = []
         for var in condition.split('+'):
             var_name = var.strip(" ()\"'")
             if var_name in results.columns:
                 child_vars.append(var_name)
-        parent_name = f"{row['variable number']}. {row['variable']}"
+        variable_number = str(row['variable number'])
+        if '.' not in variable_number:
+            variable_number += '.'
+        parent_name = f"{variable_number} {row['variable']}"
         count_true = sum([results[var] for var in child_vars])
-        results[parent_name] = count_true > threshold 
-        for i, var_name in enumerate(child_vars, start=1):
-            new_name = f"{row['variable number']}.{i}. {var_name}"
-            results.rename(columns={var_name: new_name}, inplace=True)
+        results[parent_name] = count_true > threshold
     return results
 
 # EXPORT RESULTS
@@ -237,18 +248,14 @@ def preliminary_checks(set_search_strings, set_doc_conditionals, set_co_occurren
 
 # Check the search strings for errors
 def check_search_strings(search_strings, taxonomy, doc_conditionals, co_occurrences,variables):
-    required_columns = ['proxy', 'query']
+    required_columns = ['query name', 'query']
     if not all(column in search_strings.columns for column in required_columns):
         print(f"Error: The search_strings tab does not have the required columns. Keep the column headers included in the template.")
         return False
 
-    if search_strings.isnull().values.any():
-        print("Error: The search_strings tab contains NaN values.")
-        return False
-
     valid_terms = set(taxonomy.columns) | set(doc_conditionals['name of document-level conditional']) | set(co_occurrences['name of co-occurrence'])
     
-    if search_strings['proxy'].duplicated().any():
+    if search_strings['query name'].duplicated().any():
         print("Error: The 'variable' column in the search_strings tab contains duplicate entries.")
         return False
     
@@ -280,48 +287,49 @@ def check_search_strings(search_strings, taxonomy, doc_conditionals, co_occurren
         print("Error: co_occurrences tab does not have the required columns.")
         return False
     
-    if co_occurrences.isnull().values.any():
-        print("Error: co_occurrences tab contains NaN values.")
-        return False
-    
     valid_terms_for_co_occurrences = set(taxonomy.columns)
     for index, row in co_occurrences.iterrows():
         if row['first list'] not in valid_terms_for_co_occurrences or row['second list'] not in valid_terms_for_co_occurrences:
             print(f"Error: Check if these strings in co_occurrences '{row['first list']}' or '{row['second list']}' are present in the taxonomy as column headers.")
             return False
 
-    # Check doc_conditionals
     required_doc_conditional_columns = ['name of document-level conditional', 'list']
     if not all(column in doc_conditionals.columns for column in required_doc_conditional_columns):
         print("Error: doc_conditionals tab does not have the required columns.")
-        return False
-    
-    if doc_conditionals.isnull().values.any():
-        print("Error: doc_conditionals tab contains NaN values.")
         return False
     
     for index, row in doc_conditionals.iterrows():
         if row['list'] not in valid_terms_for_co_occurrences:
             print(f"Error: The string '{row['list']}' in doc_conditionals is not present in the taxonomy as column headers.")
             return False
-        
-    if AGGREGATE_VARIABLES:
-        if variables.isnull().values.any():
-            print("Error: The variables DataFrame contains NaN values.")
-            return False
 
-        all_variables_in_search_strings = set(search_strings['proxy'])
+    all_variables_in_search_strings = set(search_strings['query name'])
 
-        child_variables = set()
-        for query in variables['aggregation query']:
-            matches = re.findall(r'"(.*?)"', query)
-            child_variables.update(matches)
+    child_variables = set()
+    for query in variables['aggregation query']:
+        matches = re.findall(r'"(.*?)"', query)
+        child_variables.update(matches)
 
-        missing_variables = child_variables - all_variables_in_search_strings
-        if missing_variables:
-            print(f"Error: The following proxies are not present in the search_strings 'proxy' column: {missing_variables}")
-            return False
+    missing_variables = child_variables - all_variables_in_search_strings
+    if missing_variables:
+        print(f"Error: The following queries are not present in the search_strings 'query name' column: {missing_variables}. Note that query names cannot be numerical")
+        return False
     return True
+
+def estimate_run_time(df, full_run=False):
+    start_time = time.time()
+    sample_df = df.sample(n=50)
+    variables, set_search_strings, set_co_occurrences, set_doc_conditionals, set_keywords = create_dataframes(ASSESSMENT_FRAMEWORK_DIRECTORY)
+    key_dict = organize_keywords(set_keywords)
+    sample_df = sample_df.apply(check_groups, axis=1, args=(key_dict,))
+    sample_df = initiate_co_occurrences(sample_df, set_co_occurrences, key_dict)
+    initiate_document_conditionals(sample_df, set_doc_conditionals)
+    if SENTIMENT_ANALYSIS:
+        sample_df['vadar_compound'] = sample_df['sentences'].apply(vadar_sentiment_analysis) 
+    sample_results = run_queries(sample_df, set_search_strings)
+    sample_results = define_variables(sample_results, variables)
+    end_time = time.time()
+    return end_time - start_time
 
 def main():  
     # Load, clean, and organize data
@@ -339,6 +347,14 @@ def main():
         clean_text(df, 'text')
     df = split_sentences(df)
     df = df.drop('text', axis=1)
+    if PRINT_RUN_TIME:
+        total_sentences = len(df)
+        if total_sentences < 50:
+            print(f"The dataset has only {total_sentences} sentences, which is insufficient to accurately estimate runtime.")
+        else:
+            time_for_50 = estimate_run_time(df, full_run=False)
+            estimated_total_time = (time_for_50 / 50) * total_sentences
+            print(f"Estimated run time for {total_sentences} sentences: {estimated_total_time} seconds (excluding time to export results).")
     key_dict = organize_keywords(set_keywords)
     # Analyze text based on the taxonomy
     df = df.apply(check_groups, axis=1, args=(key_dict,))
@@ -348,8 +364,7 @@ def main():
         df['vadar_compound'] = df['sentences'].apply(vadar_sentiment_analysis) 
     # Run queries and aggregate variables
     results = run_queries(df, set_search_strings)
-    if AGGREGATE_VARIABLES:
-        results = aggregate_and_rename_variables(results, variables)
+    results = define_variables(results, variables)
     os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
     if EXPORT_DOCUMENT_DATA:
         codebook = results_document(results)
