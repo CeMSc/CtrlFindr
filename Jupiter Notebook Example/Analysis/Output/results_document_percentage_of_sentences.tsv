@@ -1,8 +1,8 @@
-document	1. climate change	1.1. fast climate onset	1.2. slow climate onset	2. climate change and human wild life conflict	2.1. human-wildlife conflict and fast climate onset	2.2.1. human-wildlife conflict and fast climate onset in articles that mention ipcc	2.2. human-wildlife conflict and slow climate onset	3. resource competition and human-wild life conflict
-examplefile	71.42857142857143	28.57142857142857	42.857142857142854	28.57142857142857	14.285714285714285	14.285714285714285	14.285714285714285	14.285714285714285
-wiki2023_United_Nations_Climate_Change_Conference	17.77777777777778	0.8888888888888888	16.88888888888889	0.0	0.0	0.0	0.0	0.0
-wikiAnthropocene	20.408163265306122	0.40816326530612246	20.0	0.40816326530612246	0.0	0.0	0.40816326530612246	0.0
-wikiClimate_change	45.583038869257955	4.946996466431095	40.63604240282685	0.0	0.0	0.0	0.0	0.0
-wikiClimate_justice	41.14583333333333	3.125	38.02083333333333	0.0	0.0	0.0	0.0	0.0
-wikiClimate_security	47.82608695652174	1.3043478260869565	46.52173913043478	0.0	0.0	0.0	0.0	0.0
-wikiHuman-wildlife_conflict	1.6666666666666667	0.0	1.6666666666666667	0.0	0.0	0.0	0.0	2.5
+document	1. climate change	1.1 fast climate onset	1.2 slow climate onset	2. climate change and human wild life conflict	2.1 human-wildlife conflict and fast climate onset	2.1.1 human-wildlife conflict and fast climate onsets in articles that do mention ipcc	2.1.2 human-wildlife conflict and fast climate onsets in articles that mention ipcc	2.2 human-wildlife conflict and slow climate onsets	3. resource competition and human-wild life conflict	4. increase of adaptive capacity	5. decrease of adaptive capacity
+examplefile	41.66666666666667	8.333333333333332	33.33333333333333	16.666666666666664	8.333333333333332	0.0	8.333333333333332	8.333333333333332	8.333333333333332	8.333333333333332	8.333333333333332
+wiki2023_United_Nations_Climate_Change_Conference	37.333333333333336	0.4444444444444444	36.888888888888886	0.0	0.0	0.0	0.0	0.0	0.0	0.0	0.0
+wikiAnthropocene	20.816326530612244	0.0	20.816326530612244	0.8163265306122449	0.0	0.0	0.0	0.8163265306122449	0.0	0.0	0.0
+wikiClimate_change	57.243816254416956	5.6537102473498235	51.590106007067135	1.2367491166077738	0.0	0.0	0.0	1.2367491166077738	0.0	0.17667844522968199	0.0
+wikiClimate_justice	60.20942408376963	3.1413612565445024	57.06806282722513	0.5235602094240838	0.0	0.0	0.0	0.5235602094240838	0.0	0.0	0.0
+wikiClimate_security	70.0	1.3043478260869565	68.69565217391305	0.0	0.0	0.0	0.0	0.0	0.0	0.0	0.0
+wikiHuman-wildlife_conflict	1.6666666666666667	0.8333333333333334	0.8333333333333334	0.0	0.0	0.0	0.0	0.0	2.5	0.0	0.0

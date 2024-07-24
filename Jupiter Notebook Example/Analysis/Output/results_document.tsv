@@ -1,8 +1,8 @@
-document	1. climate change	1.1. fast climate onset	1.2. slow climate onset	2. climate change and human wild life conflict	2.1. human-wildlife conflict and fast climate onset	2.2.1. human-wildlife conflict and fast climate onset in articles that mention ipcc	2.2. human-wildlife conflict and slow climate onset	3. resource competition and human-wild life conflict
-examplefile	5	2	3	2	1	1	1	1
-wiki2023_United_Nations_Climate_Change_Conference	40	2	38	0	0	0	0	0
-wikiAnthropocene	50	1	49	1	0	0	1	0
-wikiClimate_change	258	28	230	0	0	0	0	0
-wikiClimate_justice	79	6	73	0	0	0	0	0
-wikiClimate_security	110	3	107	0	0	0	0	0
-wikiHuman-wildlife_conflict	2	0	2	0	0	0	0	3
+document	1. climate change	1.1 fast climate onset	1.2 slow climate onset	2. climate change and human wild life conflict	2.1 human-wildlife conflict and fast climate onset	2.1.1 human-wildlife conflict and fast climate onsets in articles that do mention ipcc	2.1.2 human-wildlife conflict and fast climate onsets in articles that mention ipcc	2.2 human-wildlife conflict and slow climate onsets	3. resource competition and human-wild life conflict	4. increase of adaptive capacity	5. decrease of adaptive capacity
+examplefile	5	1	4	2	1	0	1	1	1	1	1
+wiki2023_United_Nations_Climate_Change_Conference	84	1	83	0	0	0	0	0	0	0	0
+wikiAnthropocene	51	0	51	2	0	0	0	2	0	0	0
+wikiClimate_change	324	32	292	7	0	0	0	7	0	1	0
+wikiClimate_justice	115	6	109	1	0	0	0	1	0	0	0
+wikiClimate_security	161	3	158	0	0	0	0	0	0	0	0
+wikiHuman-wildlife_conflict	2	1	1	0	0	0	0	0	3	0	0

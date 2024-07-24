@@ -1,8 +1,8 @@
-document	1. climate change	1.1. fast climate onset	1.2. slow climate onset	2. climate change and human wild life conflict	2.1. human-wildlife conflict and fast climate onset	2.2.1. human-wildlife conflict and fast climate onset in articles that mention ipcc	2.2. human-wildlife conflict and slow climate onset	3. resource competition and human-wild life conflict
-examplefile	-0.07636	-0.1909	0.0	-0.35	-0.3818	-0.3818	-0.3182	-0.3818
-wiki2023_United_Nations_Climate_Change_Conference	-0.02758	0.044399999999999995	-0.03136842105263158					
-wikiAnthropocene	-0.09624400000000001	0.1531	-0.10133265306122449	-0.8807			-0.8807	
-wikiClimate_change	0.07256240310077519	0.06232857142857142	0.07380826086956521					
-wikiClimate_justice	-0.03572911392405064	-0.6161833333333333	0.011979452054794516					
-wikiClimate_security	-0.041164545454545454	-0.2546	-0.035180373831775705					
-wikiHuman-wildlife_conflict	-0.1591		-0.1591					-0.3176333333333333
+document	1. climate change	1.1 fast climate onset	1.2 slow climate onset	2. climate change and human wild life conflict	2.1 human-wildlife conflict and fast climate onset	2.1.1 human-wildlife conflict and fast climate onsets in articles that do mention ipcc	2.1.2 human-wildlife conflict and fast climate onsets in articles that mention ipcc	2.2 human-wildlife conflict and slow climate onsets	3. resource competition and human-wild life conflict	4. increase of adaptive capacity	5. decrease of adaptive capacity
+examplefile	0.05464	0.2732	0.0	-0.022499999999999992	0.2732		0.2732	-0.3182	-0.3818	0.3182	-0.6908
+wiki2023_United_Nations_Climate_Change_Conference	0.11616547619047621	0.5994	0.11034337349397591								
+wikiAnthropocene	-0.061662745098039214		-0.061662745098039214	0.1806				0.1806			
+wikiClimate_change	0.07590586419753086	0.06156875	0.07747705479452055	-0.10034285714285714				-0.10034285714285714		0.6911	
+wikiClimate_justice	0.11783217391304347	-0.3557666666666666	0.1439018348623853	-0.0258				-0.0258			
+wikiClimate_security	0.04518509316770186	-0.5896	0.0572379746835443								
+wikiHuman-wildlife_conflict	0.15335000000000001	0.6249	-0.3182						-0.3176333333333333		
