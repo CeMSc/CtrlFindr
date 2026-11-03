@@ -1,0 +1,146 @@
+{
+ "hwc": {
+  "rows": [
+   1483,
+   1486,
+   1487,
+   1490,
+   1493,
+   1495,
+   1501,
+   1506,
+   1512,
+   1526,
+   1530,
+   1531,
+   1534,
+   1540,
+   1543,
+   1545,
+   1552,
+   1560,
+   1565,
+   1568,
+   1587
+  ],
+  "cause": "dash folding: taxonomy term \"human\u2013wildlife\" (en dash) now matches \"human-wildlife\" (hyphen)"
+ },
+ "co_slow": {
+  "rows": [
+   11,
+   503,
+   672,
+   700,
+   702,
+   1251,
+   1341,
+   1449
+  ],
+  "cause": "distance = words strictly between the two matches (v2.1 also counted the first keyword)"
+ },
+ "co_hwc": {
+  "rows": [
+   1488
+  ],
+  "cause": "distance = words strictly between the two matches (v2.1 also counted the first keyword)"
+ },
+ "co_resourceandcompetition": {
+  "rows": [
+   1358,
+   1562
+  ],
+  "cause": "distance = words strictly between the two matches (v2.1 also counted the first keyword)"
+ },
+ "co_increasecapacity": {
+  "rows": [
+   132
+  ],
+  "cause": "distance = words strictly between the two matches (v2.1 also counted the first keyword)"
+ },
+ "a1": {
+  "rows": [
+   11,
+   700,
+   702
+  ],
+  "cause": "follows from the changes above"
+ },
+ "a2": {
+  "rows": [
+   11,
+   700,
+   702
+  ],
+  "cause": "follows from the changes above"
+ },
+ "b2": {
+  "rows": [
+   11
+  ],
+  "cause": "follows from the changes above"
+ },
+ "b3": {
+  "rows": [
+   11
+  ],
+  "cause": "follows from the changes above"
+ },
+ "c1": {
+  "rows": [
+   1562
+  ],
+  "cause": "follows from the changes above"
+ },
+ "d1": {
+  "rows": [
+   132
+  ],
+  "cause": "follows from the changes above"
+ },
+ "1.1 fast climate onset": {
+  "rows": [
+   11,
+   700,
+   702
+  ],
+  "cause": "follows from the changes above"
+ },
+ "1.2 slow climate onset": {
+  "rows": [
+   11,
+   700,
+   702
+  ],
+  "cause": "follows from the changes above"
+ },
+ "2.1 human-wildlife conflict and fast climate onset": {
+  "rows": [
+   11
+  ],
+  "cause": "follows from the changes above"
+ },
+ "2.1.2 human-wildlife conflict and fast climate onsets in articles that mention ipcc": {
+  "rows": [
+   11
+  ],
+  "cause": "follows from the changes above"
+ },
+ "2.2 human-wildlife conflict and slow climate onsets": {
+  "rows": [
+   11
+  ],
+  "cause": "follows from the changes above"
+ },
+ "3. resource competition and human-wild life conflict": {
+  "rows": [
+   1562
+  ],
+  "cause": "follows from the changes above"
+ },
+ "4. increase of adaptive capacity": {
+  "rows": [
+   132
+  ],
+  "cause": "follows from the changes above"
+ }
+}

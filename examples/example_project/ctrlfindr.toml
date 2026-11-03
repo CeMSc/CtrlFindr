@@ -1,0 +1,21 @@
+# CtrlFindr project settings. Relative paths are relative to this file's folder.
+
+[paths]
+text_files = "Text_files"                        # folder with the .txt documents
+framework  = "Input/Assessment_framework.ods"    # assessment framework
+output     = "Output"                            # results (TSVs, run_metadata.json, log)
+database   = "Output/analysis.sqlite"            # keep on a local disk, not a network drive
+
+[ingest]
+text_cleaning     = true      # remove URLs; turn ".." and "..." into "."
+encoding_errors   = "strict"  # "strict": stop on files that are not UTF-8; "replace": substitute bad bytes
+long_segment_words = 500      # warn about "sentences" longer than this many words
+
+[sentiment]
+enabled            = true
+positive_threshold = 0.05     # VADER compound >= 0.05 is positive
+negative_threshold = -0.05    # VADER compound <= -0.05 is negative
+
+[export]
+sentence_level = true         # results_sentences.tsv
+document_level = true         # the four results_document*.tsv files
