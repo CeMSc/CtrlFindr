@@ -1,0 +1,17 @@
+# Generated results and databases
+Output/
+*.sqlite
+*.sqlite-journal
+# LibreOffice / Excel lock files
+~$*
+.~lock.*#
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
