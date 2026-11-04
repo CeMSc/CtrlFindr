@@ -27,7 +27,7 @@ from .common import (
     write_table,
 )
 from .config import Config
-from .engine import analyze_sentences, run_tests
+from .engine import analyze_sentences, exclude_sentences, run_tests
 from .framework import Framework, load_framework
 
 log = logging.getLogger("ctrlfindr")
@@ -82,7 +82,7 @@ def check_framework(fw: Framework) -> list[str]:
 
 def _package_versions() -> dict[str, str]:
     out = {}
-    for pkg in ("pandas", "numpy", "pysbd", "vaderSentiment", "pyahocorasick", "openpyxl", "tqdm"):
+    for pkg in ("pandas", "numpy", "pysbd", "vaderSentiment", "pyahocorasick", "openpyxl", "tqdm"):  # vader optional
         try:
             out[pkg] = metadata.version(pkg)
         except metadata.PackageNotFoundError:
@@ -108,9 +108,16 @@ def run(cfg: Config, show_progress: bool = True, run_tests_first: bool = True) -
         if not (table_exists(conn, SENTENCES) and table_exists(conn, DOCUMENTS)):
             raise CtrlFindrError(f"database {db} has no ingested documents; run the ingest step first")
         sentences = read_table(conn, SENTENCES, order_by="document, sentence_id")
-        documents = read_table(conn, DOCUMENTS, order_by="document")[["document", "path", "sha256"]]
-    if sentences.empty:
-        raise CtrlFindrError("the database contains no sentences; check the text files and run ingest again")
+        documents = read_table(conn, DOCUMENTS, order_by="document")[["document", "path", "format", "sha256"]]
+        if sentences.empty:
+            raise CtrlFindrError("the database contains no sentences; check the text files and run ingest again")
+        sentences = exclude_sentences(sentences, fw.settings)
+        if sentences.empty:
+            raise CtrlFindrError("every sentence is excluded by exclude_sentence_types in the settings sheet")
+        if fw.settings.sentiment:
+            from .sentiment import cached_scores
+
+            sentences["vader_compound"] = cached_scores(conn, sentences)
     log.info("Analyzing %d sentences from %d documents", len(sentences), sentences["document"].nunique())
 
     results = analyze_sentences(sentences, fw, long_segment_words=cfg.ingest.long_segment_words,

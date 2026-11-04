@@ -14,14 +14,14 @@ dependencies = [
     "pandas>=2.1",
     "numpy>=1.26",
     "pysbd>=0.3.4",
-    "vaderSentiment>=3.3.2",
     "pyahocorasick>=2.1",
     "openpyxl>=3.1",
     "tqdm>=4.60",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+sentiment = ["vaderSentiment>=3.3.2"]  # needed only for frameworks with sentiment = true
+test = ["pytest>=8", "vaderSentiment>=3.3.2"]
 
 [project.scripts]
 ctrlfindr = "ctrlfindr.__main__:main"

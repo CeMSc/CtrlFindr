@@ -123,3 +123,12 @@ def test_framework_tests_pass_and_fail(tmp_path):
     assert len(failures) == 2 and all("tests row 5" in f for f in failures)
     assert "expected conflict to be true, got false" in failures[0]
     assert "Matched: haz: floods" in failures[0]
+
+
+def test_exclude_sentences_by_structure():
+    from ctrlfindr.engine import exclude_sentences
+
+    df = pd.DataFrame({"document": ["a", "a", "b"], "structure": ["header", "body", "table"], "text": ["H", "B", "T"]})
+    out = exclude_sentences(df, Settings(exclude_sentence_types=("header", "table")))
+    assert out["text"].tolist() == ["B"]
+    assert exclude_sentences(df, Settings()) is df

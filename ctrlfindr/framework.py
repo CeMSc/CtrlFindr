@@ -4,7 +4,7 @@ Sheets (names are case-insensitive; columns marked * are required):
 
 meta         key*, value                  format_version (required), title, version, author,
                                           language, description, and any other key
-settings     key*, value*, note           coding settings (optional sheet; defaults below)
+settings     key*, value, note            coding settings (optional sheet; empty value = default)
 taxonomy     list*, term*, note           one row per term; "-phrase" / "-@list" exclude
 queries      name*, query*, note          named expressions (see ctrlfindr.query)
 variables    number*, name*, definition, parent, note
@@ -34,12 +34,13 @@ SENTIMENT_TERMS = (
     "sentiment_negative",
     "sentiment_neutralnegative",
 )
-OUTPUT_COLUMNS = {"document", "sentences", "sentence_id", "start", "end", "vader_compound"}
+OUTPUT_COLUMNS = {"document", "sentences", "sentence_id", "structure", "start", "end", "vader_compound"}
+STRUCTURE_LABELS = ("header", "body", "list", "table", "unstructured")  # see ctrlfindr.ingest
 RESERVED = OUTPUT_COLUMNS | set(SENTIMENT_TERMS)
 
 SHEETS = {
     "meta": (("key",), ("value",)),
-    "settings": (("key", "value"), ("note",)),
+    "settings": (("key",), ("value", "note")),
     "taxonomy": (("list", "term"), ("note",)),
     "queries": (("name", "query"), ("note",)),
     "variables": (("number", "name"), ("definition", "parent", "note")),
@@ -54,11 +55,12 @@ _VAR_NUMBER = re.compile(r"\d+(\.\d+)*")
 class Settings:
     """Coding settings stored in the framework (sheet 'settings')."""
 
-    sentiment: bool = True
+    sentiment: bool = False
     sentiment_positive_threshold: float = 0.05
     sentiment_negative_threshold: float = -0.05
     aggregate_children: bool = False
     tests_must_pass: bool = True
+    exclude_sentence_types: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,8 @@ def _settings(records, problems: list[str]) -> Settings:
     for i, rec in records:
         key, value = rec["key"].lower(), rec["value"]
         where = f"sheet 'settings', row {i}"
+        if not value:  # left empty: keep the default
+            continue
         if key in seen:
             problems.append(f"{where}: setting {key!r} is already set in row {seen[key]}")
             continue
@@ -175,7 +179,15 @@ def _settings(records, problems: list[str]) -> Settings:
             problems.append(f"{where}: unknown setting {key!r} (known: {', '.join(Settings.__dataclass_fields__)})")
             continue
         default = getattr(s, key)
-        if isinstance(default, bool):
+        if isinstance(default, tuple):
+            items = tuple(dict.fromkeys(x.strip().lower() for x in re.split(r"[,;]", value) if x.strip()))
+            unknown = [x for x in items if x not in STRUCTURE_LABELS]
+            if unknown:
+                problems.append(f"{where}: {key}: unknown sentence type(s) {', '.join(map(repr, unknown))} "
+                                f"(known: {', '.join(STRUCTURE_LABELS)})")
+                continue
+            setattr(s, key, items)
+        elif isinstance(default, bool):
             b = _bool(value)
             if b is None:
                 problems.append(f"{where}: {key} must be true or false, not {value!r}")
@@ -189,6 +201,11 @@ def _settings(records, problems: list[str]) -> Settings:
     if not (-1 <= s.sentiment_negative_threshold <= 0 <= s.sentiment_positive_threshold <= 1):
         problems.append("sheet 'settings': thresholds must satisfy "
                         "-1 <= sentiment_negative_threshold <= 0 <= sentiment_positive_threshold <= 1")
+    if s.sentiment:
+        from . import sentiment
+
+        if not sentiment.available():
+            problems.append(f"sheet 'settings': {sentiment.MISSING}")
     return s
 
 

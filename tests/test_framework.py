@@ -145,3 +145,31 @@ def test_all_problems_reported_together(tmp_path):
     text = problems(tmp_path, taxonomy=TAX + [("bad", "~x")], queries=QUERIES + [("q", "nope")],
                     variables=VARIABLES + [("9", "X", "")])
     assert text.count("\n") >= 2
+
+
+def test_sentiment_is_off_by_default(tmp_path):
+    from ctrlfindr.spreadsheet import SheetSpec, write_workbook
+
+    path = make_framework(tmp_path / "fw.ods", TAX, [("q", "fast")], [("1", "V", "q")])
+    sheets = {"meta": [["key", "value"], ["format_version", "1"]], "taxonomy": [["list", "term"], ["a", "x"]],
+              "queries": [["name", "query"], ["q", "a"]], "variables": [["number", "name", "definition"], ["1", "V", "q"]]}
+    path = write_workbook(tmp_path / "nosettings.ods", [SheetSpec(k, v) for k, v in sheets.items()])
+    assert load_framework(path).settings.sentiment is False
+
+
+def test_exclude_sentence_types(tmp_path):
+    fw = load_framework(build(tmp_path, settings={"exclude_sentence_types": "Header; table"}))
+    assert fw.settings.exclude_sentence_types == ("header", "table")
+    assert "unknown sentence type(s) 'footer'" in problems(tmp_path, settings={"exclude_sentence_types": "header, footer"})
+
+
+def test_empty_setting_value_keeps_default(tmp_path):
+    fw = load_framework(build(tmp_path, settings={"sentiment_positive_threshold": ""}))
+    assert fw.settings.sentiment_positive_threshold == 0.05
+
+
+def test_sentiment_without_vader_is_reported(tmp_path, monkeypatch):
+    from ctrlfindr import sentiment
+
+    monkeypatch.setattr(sentiment, "available", lambda: False)
+    assert "needs the vaderSentiment package" in problems(tmp_path)

@@ -20,10 +20,11 @@ def make_framework(
     """taxonomy: (list, term[, note]); queries: (name, query[, note]);
     variables: (number, name, definition[, parent]); tests: (sentence, expect_true, expect_false[, group])."""
     meta = {"format_version": "1", **(meta or {})}
+    settings = {"sentiment": True, **(settings or {})}  # most tests use sentiment; the default is off
     sheets = {
         "meta": [["key", "value"]] + [[k, v] for k, v in meta.items()],
         "settings": [["key", "value", "note"]] + [[k, str(v).lower() if isinstance(v, bool) else str(v), ""]
-                                                   for k, v in (settings or {}).items()],
+                                                   for k, v in settings.items()],
         "taxonomy": [["list", "term", "note"]] + [list(r) + [""] * (3 - len(r)) for r in taxonomy],
         "queries": [["name", "query", "note"]] + [list(r) + [""] * (3 - len(r)) for r in queries],
         "variables": [["number", "name", "definition", "parent", "note"]] + [list(r) + [""] * (5 - len(r)) for r in variables],

@@ -21,7 +21,8 @@ def codebook(fw: Framework) -> str:
             out.append(f"- **{_md(key)}:** {_md(value)}")
     out.append(f"- **file:** {fw.path.name} (SHA-256 `{fw.sha256[:16]}…`)")
     out += ["", "## Settings", ""]
-    out += [f"- `{k}` = {str(v).lower() if isinstance(v, bool) else v}" for k, v in asdict(fw.settings).items()]
+    out += [f"- `{k}` = {(str(v).lower() if isinstance(v, bool) else ', '.join(v) or '(none)' if isinstance(v, tuple) else v)}"
+            for k, v in asdict(fw.settings).items()]
 
     out += ["", "## Variables", "", "| number | name | definition | parent | note |", "|---|---|---|---|---|"]
     for v in fw.variables:

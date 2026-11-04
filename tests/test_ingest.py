@@ -1,4 +1,5 @@
 import sqlite3
+import sys
 
 import pytest
 
@@ -50,9 +51,10 @@ def test_offsets_point_into_clean_text(tmp_path):
 
 
 def test_discovery_rules(tmp_path):
-    cfg = project(tmp_path, {"b.TXT": b"Upper case extension.", "a.report.txt": b"Dotted name.", "notes.md": b"skip"})
+    cfg = project(tmp_path, {"b.TXT": b"Upper case extension.", "a.report.txt": b"Dotted name.",
+                             "c.MD": b"# Title", "notes.docx": b"skip"})
     ingest.run(cfg, show_progress=False)
-    assert sorted({r[0] for r in sentences(cfg)}) == ["a.report", "b"]
+    assert sorted({r[0] for r in sentences(cfg)}) == ["a.report", "b", "c"]
 
 
 def test_duplicate_document_names(tmp_path):
@@ -70,7 +72,7 @@ def test_missing_or_empty_folder(tmp_path):
     with pytest.raises(CtrlFindrError, match="not found"):
         ingest.run(config_from_dict({}, base=tmp_path), show_progress=False)
     (tmp_path / "Text_files").mkdir()
-    with pytest.raises(CtrlFindrError, match="no .txt files"):
+    with pytest.raises(CtrlFindrError, match="no .txt or .md files"):
         ingest.run(config_from_dict({}, base=tmp_path), show_progress=False)
 
 
@@ -102,3 +104,42 @@ def test_incremental(tmp_path):
     assert [r[4] for r in sentences(cfg)] == ["Beta two.", "Beta three.", "Gamma."]
     cfg.ingest.text_cleaning = False  # a setting change rebuilds everything
     assert ingest.run(cfg, show_progress=False)["processed"] == 2
+
+
+def structures(cfg):
+    with sqlite3.connect(cfg.paths.database) as conn:
+        return conn.execute("SELECT document, structure, text FROM sentences ORDER BY document, sentence_id").fetchall()
+
+
+def test_txt_is_unstructured_and_md_is_labelled(tmp_path):
+    md = ("# Climate *risks*\n\nFloods rose. Droughts too.\n\n- Item one\n- Item two\n\n"
+          "| Region | Clashes |\n|---|---|\n| North | 14 |\n\nEnd.").encode()
+    cfg = project(tmp_path, {"plain.txt": b"HEADING\nText here. More text.", "brief.md": md})
+    ingest.run(cfg, show_progress=False)
+    rows = structures(cfg)
+    assert [r[1:] for r in rows if r[0] == "brief"] == [
+        ("header", "Climate risks"), ("body", "Floods rose."), ("body", "Droughts too."),
+        ("list", "Item one"), ("list", "Item two"), ("table", "Region | Clashes"), ("table", "North | 14"),
+        ("body", "End.")]
+    assert {r[1] for r in rows if r[0] == "plain"} == {"unstructured"}
+    with sqlite3.connect(cfg.paths.database) as conn:
+        clean = dict(conn.execute("SELECT document, clean_text FROM documents"))
+        formats = dict(conn.execute("SELECT document, format FROM documents"))
+        spans = conn.execute('SELECT document, start, "end", text FROM sentences').fetchall()
+    assert formats == {"brief": "md", "plain": "txt"}
+    assert all(clean[d][s:e] == t for d, s, e, t in spans)
+
+
+def test_txt_and_md_with_the_same_name_clash(tmp_path):
+    cfg = project(tmp_path, {"a.txt": b"x.", "a.md": b"y."})
+    with pytest.raises(ValidationError, match="clashing names"):
+        ingest.run(cfg, show_progress=False)
+
+
+def test_ingest_does_not_need_vader(tmp_path, monkeypatch):
+    import importlib.util
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None if name.startswith("vaderSentiment") else real(name, *a))
+    monkeypatch.setitem(sys.modules, "vaderSentiment", None)
+    cfg = project(tmp_path, {"a.txt": b"Fine text."})
+    assert ingest.run(cfg, show_progress=False)["sentences"] == 1

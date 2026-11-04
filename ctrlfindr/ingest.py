@@ -1,8 +1,16 @@
-"""Ingest step: text files -> cleaned documents and scored sentences in SQLite.
+"""Ingest step: text files -> cleaned documents and sentences in SQLite.
+
+Two input types are read from the text files folder:
+
+* ``.txt`` files are plain, unstructured text. Every sentence gets the structure label
+  ``unstructured``.
+* ``.md`` files are Markdown. Headings, list items, table rows and body text are told
+  apart (see ctrlfindr.markdown), Markdown syntax is removed, and every sentence gets the
+  label ``header``, ``list``, ``table`` or ``body``.
 
 Re-running ingest only processes files that are new or changed (by SHA-256) and removes
-documents whose files are gone. Changing the cleaning setting, or upgrading CtrlFindr,
-pySBD or vaderSentiment, rebuilds everything.
+documents whose files are gone. Changing the cleaning setting, or upgrading CtrlFindr or
+pySBD, rebuilds everything. Sentiment is not computed here (see ctrlfindr.sentiment).
 """
 
 from __future__ import annotations
@@ -17,13 +25,19 @@ from importlib import metadata
 from pathlib import Path
 
 from . import __version__
-from .common import DOCUMENTS, META, SENTENCES, CtrlFindrError, ValidationError, connect, normalize_text, sha256_file
+from .common import (DOCUMENTS, META, SENTENCES, SENTIMENT, CtrlFindrError, ValidationError, connect,
+                     normalize_text, sha256_file)
 from .config import Config
+from .markdown import blocks as markdown_blocks
 
 log = logging.getLogger("ctrlfindr")
 
 # Bump when cleaning or segmentation logic changes, so existing databases are rebuilt.
-INGEST_REVISION = 4
+INGEST_REVISION = 5
+SUFFIXES = {".txt": "txt", ".md": "md"}
+UNSTRUCTURED = "unstructured"
+STRUCTURE_LABELS = ("header", "body", "list", "table", UNSTRUCTURED)
+_SINGLE_SEGMENT = {"header", "table"}  # never split into several sentences
 
 _URL = re.compile(r"http\S+|www\S+|https\S+")
 _ELLIPSIS = re.compile(r"\.{2,}")
@@ -34,12 +48,16 @@ _CITATION_AFTER_STOP = re.compile(r"(?<=[.!?])(?=\[\d)")  # "2050.[4] The" -> "2
 
 _SCHEMA = (
     f"""CREATE TABLE IF NOT EXISTS {DOCUMENTS} (
-        document TEXT PRIMARY KEY, path TEXT NOT NULL, sha256 TEXT NOT NULL, clean_text TEXT NOT NULL)""",
+        document TEXT PRIMARY KEY, path TEXT NOT NULL, format TEXT NOT NULL, sha256 TEXT NOT NULL,
+        clean_text TEXT NOT NULL)""",
     f"""CREATE TABLE IF NOT EXISTS {SENTENCES} (
-        document TEXT NOT NULL, sentence_id INTEGER NOT NULL, start INTEGER NOT NULL, "end" INTEGER NOT NULL,
-        text TEXT NOT NULL, vader_compound REAL NOT NULL, PRIMARY KEY (document, sentence_id))""",
+        document TEXT NOT NULL, sentence_id INTEGER NOT NULL, structure TEXT NOT NULL,
+        start INTEGER NOT NULL, "end" INTEGER NOT NULL, text TEXT NOT NULL,
+        PRIMARY KEY (document, sentence_id))""",
     f"CREATE TABLE IF NOT EXISTS {META} (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 )
+_COLUMNS = {DOCUMENTS: ["document", "path", "format", "sha256", "clean_text"],
+            SENTENCES: ["document", "sentence_id", "structure", "start", "end", "text"]}
 
 
 @dataclass(frozen=True)
@@ -47,22 +65,28 @@ class SourceFile:
     document: str
     path: Path
 
+    @property
+    def format(self) -> str:
+        return SUFFIXES[self.path.suffix.lower()]
+
 
 @dataclass(frozen=True)
 class Sentence:
     sentence_id: int
+    structure: str
     start: int
     end: int
     text: str
 
 
 def discover(text_dir: Path) -> list[SourceFile]:
-    """Sorted list of the .txt files in ``text_dir`` (extension matched case-insensitively)."""
+    """Sorted list of the .txt and .md files in ``text_dir`` (extensions in any case)."""
     if not text_dir.is_dir():
         raise CtrlFindrError(f"text files folder not found: {text_dir}")
-    files = sorted((p for p in text_dir.iterdir() if p.is_file() and p.suffix.lower() == ".txt"), key=lambda p: p.name)
+    files = sorted((p for p in text_dir.iterdir() if p.is_file() and p.suffix.lower() in SUFFIXES),
+                   key=lambda p: p.name)
     if not files:
-        raise CtrlFindrError(f"no .txt files in {text_dir}")
+        raise CtrlFindrError(f"no .txt or .md files in {text_dir}")
     out = [SourceFile(p.name[: -len(p.suffix)], p) for p in files]
     seen: dict[str, Path] = {}
     dupes = []
@@ -81,7 +105,7 @@ def decode(data: bytes, errors: str) -> str:
 
 
 def clean_document(raw: str, text_cleaning: bool = True) -> str:
-    """Normalize a document. Sentence offsets refer to the string returned here.
+    """Normalize plain text. Sentence offsets refer to the string returned here.
 
     Always: NFKC normalization and dash/quote folding; blank lines become ``\\n\\n``, where a
     sentence always ends; any other run of whitespace, including a single line break, becomes
@@ -100,20 +124,46 @@ def clean_document(raw: str, text_cleaning: bool = True) -> str:
     return text.strip()
 
 
+def prepare(raw: str, fmt: str, text_cleaning: bool = True) -> tuple[str, list[str]]:
+    """Cleaned text of a document and the structure label of each of its blocks.
+
+    Blocks are separated by ``\\n\\n`` in the cleaned text. For Markdown, each heading, list
+    item, table row and body paragraph is one block, with the Markdown syntax removed.
+    """
+    if fmt == "txt":
+        text = clean_document(raw, text_cleaning)
+        return text, [UNSTRUCTURED] * (text.count("\n\n") + 1)
+    parts, labels = [], []
+    for label, block in markdown_blocks(raw):
+        cleaned = clean_document(block, text_cleaning).replace("\n\n", " ")
+        if cleaned:
+            parts.append(cleaned)
+            labels.append(label)
+    return "\n\n".join(parts), labels
+
+
 class Segmenter:
-    """pySBD sentence splitting with character offsets; a blank line always ends a sentence."""
+    """pySBD sentence splitting with character offsets. A block boundary (blank line) always
+    ends a sentence; headings and table rows are kept whole."""
 
     def __init__(self) -> None:
         import pysbd
 
         self._seg = pysbd.Segmenter(language="en", clean=False)
 
-    def split(self, text: str) -> list[Sentence]:
+    def split(self, text: str, labels: list[str] | None = None) -> list[Sentence]:
         out: list[Sentence] = []
         pos = 0
-        for block in text.split("\n\n"):
+        for b, block in enumerate(text.split("\n\n")):
+            label = labels[b] if labels else UNSTRUCTURED
+            if not block.strip():
+                pieces = []
+            elif label in _SINGLE_SEGMENT:
+                pieces = [block]
+            else:
+                pieces = self._seg.segment(block)
             cursor = 0
-            for piece in self._seg.segment(block) if block.strip() else ():
+            for piece in pieces:
                 s = piece.strip()
                 if not s:
                     continue
@@ -123,7 +173,7 @@ class Segmenter:
                 cursor = k + len(s)
                 if not any(ch.isalpha() for ch in s):  # numbers, punctuation, "[12]" citation marks
                     continue
-                out.append(Sentence(len(out) + 1, pos + k, pos + k + len(s), s))
+                out.append(Sentence(len(out) + 1, label, pos + k, pos + k + len(s), s))
             pos += len(block) + 2
         return out
 
@@ -139,7 +189,6 @@ def _signature(cfg: Config) -> str:
         "ctrlfindr": __version__,
         "ingest_revision": INGEST_REVISION,
         "pysbd": ver("pysbd"),
-        "vaderSentiment": ver("vaderSentiment"),
         "text_cleaning": cfg.ingest.text_cleaning,
         "encoding_errors": cfg.ingest.encoding_errors,
     }
@@ -154,22 +203,24 @@ def _prepare_db(conn: sqlite3.Connection, signature: str) -> dict[str, str]:
     def columns(table: str) -> list[str]:
         return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
 
-    expected = {DOCUMENTS: ["document", "path", "sha256", "clean_text"],
-                SENTENCES: ["document", "sentence_id", "start", "end", "text", "vader_compound"]}
     stored = None
     if columns(META) == ["key", "value"]:
         row = conn.execute(f"SELECT value FROM {META} WHERE key='ingest_signature'").fetchone()
         stored = row[0] if row else None
-    rebuild = stored != signature or any(columns(t) not in ([], cols) for t, cols in expected.items())
+    rebuild = stored != signature or any(columns(t) not in ([], cols) for t, cols in _COLUMNS.items())
     if rebuild:
         if stored is not None or columns(DOCUMENTS):
             log.info("Ingest settings or versions changed: rebuilding the database")
-        for table in (SENTENCES, DOCUMENTS, META):
+        for table in (SENTIMENT, SENTENCES, DOCUMENTS, META):
             conn.execute(f"DROP TABLE IF EXISTS {table}")
     for ddl in _SCHEMA:
         conn.execute(ddl)
     conn.execute(f"INSERT OR REPLACE INTO {META} (key, value) VALUES ('ingest_signature', ?)", (signature,))
     return dict(conn.execute(f"SELECT document, sha256 FROM {DOCUMENTS}").fetchall())
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
 
 def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
@@ -206,18 +257,18 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
             log.warning("%d file(s) are not valid UTF-8; unreadable bytes were replaced: %s",
                         len(bad), "; ".join(bad[:5]) + (" ..." if len(bad) > 5 else ""))
 
+        cached_sentiment = _table_exists(conn, SENTIMENT)
         for d in removed + todo:
             conn.execute(f"DELETE FROM {SENTENCES} WHERE document=?", (d,))
             conn.execute(f"DELETE FROM {DOCUMENTS} WHERE document=?", (d,))
+            if cached_sentiment:  # scores of changed documents no longer match their sentences
+                conn.execute(f"DELETE FROM {SENTIMENT} WHERE document=?", (d,))
         for d, f in files.items():  # files may have moved; keep paths current
             conn.execute(f"UPDATE {DOCUMENTS} SET path=? WHERE document=?", (str(f.path), d))
 
         n_sent = 0
         if todo:
-            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-
             segmenter = Segmenter()
-            sia = SentimentIntensityAnalyzer()
             iterator = todo
             if show_progress:
                 from tqdm.auto import tqdm
@@ -228,20 +279,19 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
                 f = files[d]
                 data = f.path.read_bytes()
                 digest = hashlib.sha256(data).hexdigest()  # the bytes actually ingested
-                text = clean_document(decode(data, errors), cfg.ingest.text_cleaning)
+                text, labels = prepare(decode(data, errors), f.format, cfg.ingest.text_cleaning)
                 del data
-                sents = segmenter.split(text)
+                sents = segmenter.split(text, labels)
                 if not sents:
                     empty.append(f.path.name)
                 conn.execute(
-                    f"INSERT INTO {DOCUMENTS} (document, path, sha256, clean_text) VALUES (?, ?, ?, ?)",
-                    (d, str(f.path), digest, text),
+                    f"INSERT INTO {DOCUMENTS} (document, path, format, sha256, clean_text) VALUES (?, ?, ?, ?, ?)",
+                    (d, str(f.path), f.format, digest, text),
                 )
                 conn.executemany(
-                    f'INSERT INTO {SENTENCES} (document, sentence_id, start, "end", text, vader_compound) '
+                    f'INSERT INTO {SENTENCES} (document, sentence_id, structure, start, "end", text) '
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    [(d, s.sentence_id, s.start, s.end, s.text, sia.polarity_scores(s.text)["compound"])
-                     for s in sents],
+                    [(d, s.sentence_id, s.structure, s.start, s.end, s.text) for s in sents],
                 )
                 n_sent += len(sents)
             if empty:

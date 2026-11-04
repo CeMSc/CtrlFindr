@@ -15,13 +15,14 @@ Version 2.1 is kept in [legacy/](legacy/).
 
 1. **`check`**: validates the framework, reporting every problem at once with its sheet and
    row, and runs the framework's own test sentences. No text is needed.
-2. **`ingest`**: reads the `.txt` files, normalizes the text (see
-   [Text preparation](#text-preparation)), splits it into sentences with
-   [pySBD](https://github.com/nipunsadvilkar/pySBD), scores each sentence with
-   [VADER](https://github.com/cjhutto/vaderSentiment) and stores everything in an SQLite
+2. **`ingest`**: reads the `.txt` and `.md` files (see [Text inputs](#text-inputs)),
+   normalizes the text, splits it into sentences with
+   [pySBD](https://github.com/nipunsadvilkar/pySBD) and stores everything in an SQLite
    database. Later runs only process new or changed files.
 3. **`analyze`**: codes every sentence and writes the results, a codebook and the run
-   metadata. Run it again after each framework edit; there is no need to ingest again.
+   metadata. When the framework uses sentiment, it also scores sentences with
+   [VADER](https://github.com/cjhutto/vaderSentiment), once per sentence (scores are kept
+   for later runs). Run it again after each framework edit; there is no need to ingest again.
 
 `run` does ingest and analyze, `template` writes a blank framework, and `sample` draws
 sentences to hand-code (see [Validation](#validation-against-hand-coding)).
@@ -41,6 +42,11 @@ pip install -e . --no-deps
 and to run the tests. A virtual environment (`python -m venv .venv`) keeps these versions
 apart from other projects.
 
+VADER sentiment is optional. `requirements.lock` installs it; with your own installation,
+add it with `pip install vaderSentiment` (or `pip install -e ".[sentiment]"`) only if a
+framework sets `sentiment = true`. Without it everything else works, and `check` says so
+when a framework needs it.
+
 ## Quick start
 
 ```
@@ -49,8 +55,8 @@ python -m ctrlfindr run --config examples/example_project/ctrlfindr.toml
 
 The results appear in `examples/example_project/Output/`. To start your own project:
 
-1. Copy `examples/example_project/ctrlfindr.toml` into a new folder and put your `.txt` files
-   in `Text_files/` next to it.
+1. Copy `examples/example_project/ctrlfindr.toml` into a new folder and put your `.txt` or
+   `.md` files in `Text_files/` next to it.
 2. Create a framework: `python -m ctrlfindr template Input/Assessment_framework.xlsx` (or
    `.ods`), or copy one from [template/](template/). If you use `.xlsx`, change the
    `framework` path in `ctrlfindr.toml`.
@@ -58,7 +64,39 @@ The results appear in `examples/example_project/Output/`. To start your own proj
    guide, and check it with `python -m ctrlfindr check --config ctrlfindr.toml`.
 4. Run `python -m ctrlfindr run --config ctrlfindr.toml`.
 
-From Jupyter, use [notebooks/CtrlFindr.ipynb](notebooks/CtrlFindr.ipynb).
+`examples/markdown_project` shows Markdown input, with headings and table rows excluded
+from the analysis. From Jupyter, use [notebooks/CtrlFindr.ipynb](notebooks/CtrlFindr.ipynb).
+
+## Text inputs
+
+CtrlFindr reads every `.txt` and `.md` file directly in the text files folder (not in
+subfolders). Each file is one document, named after the file without its extension; a
+`.txt` and an `.md` file with the same name are reported as a clash. Files must be UTF-8.
+
+| file | treated as | structure label of each sentence |
+|---|---|---|
+| `.txt` | unstructured plain text | `unstructured` |
+| `.md` | Markdown | `header`, `body`, `list` or `table` |
+
+For Markdown files:
+
+- **header:** a heading (`# Title`, or a line underlined with `===` or `---`). It is kept
+  whole, as one sentence.
+- **list:** a list item (`-`, `*`, `+`, `•`, `1.`, `1)`), including its continuation lines,
+  split into sentences.
+- **table:** a table row (`| a | b |`). It is kept whole, with its cells joined by ` | `; the
+  `|---|` separator row is dropped.
+- **body:** everything else (paragraphs, quotes, footnote texts, code blocks), split into
+  sentences.
+
+Markdown syntax is removed before matching: emphasis markers, link targets (the link text
+stays), images, inline code backticks, footnote references, HTML tags and entities.
+Horizontal rules and link definitions are dropped.
+
+The label is stored with every sentence and appears in the `structure` column of
+`results_sentences.tsv`. To leave sentence types out of the analysis altogether, set
+`exclude_sentence_types` in the framework's settings sheet, for example `header, table`.
+Excluded sentences are not coded and do not count in per-document totals or percentages.
 
 **JupyterLab server.** For long runs, start the command in a JupyterLab terminal rather than
 a notebook: it keeps running if the browser tab closes or an idle kernel is shut down. Keep
@@ -91,7 +129,7 @@ must be unique. The reserved names are:
 - the operators `and`, `or`, `not`;
 - the function names below;
 - the sentiment flags;
-- `document`, `sentences`, `sentence_id`, `start`, `end`, `vader_compound`.
+- `document`, `sentences`, `sentence_id`, `structure`, `start`, `end`, `vader_compound`.
 
 Variable names are free text, because variables are referred to by number.
 
@@ -109,11 +147,12 @@ file alone defines the coding. A missing row uses the default.
 
 | key | default | meaning |
 |---|---|---|
-| `sentiment` | true | score sentences with VADER and allow the sentiment flags |
+| `sentiment` | false | score sentences with VADER (optional package) and allow the sentiment flags |
 | `sentiment_positive_threshold` | 0.05 | compound score at or above which a sentence is positive |
 | `sentiment_negative_threshold` | -0.05 | compound score at or below which a sentence is negative |
 | `aggregate_children` | false | a variable is also true wherever one of its child variables is true |
 | `tests_must_pass` | true | stop the analysis when a test sentence fails |
+| `exclude_sentence_types` | (none) | sentence types left out of the analysis, comma-separated: `header`, `body`, `list`, `table`, `unstructured` |
 
 ### taxonomy: terms
 
@@ -249,8 +288,11 @@ This assumes random sampling within each stratum, which is what `sample` does.
 
 ## Sentiment
 
-Each sentence gets a VADER compound score between -1 and 1, computed on the original,
-not lowercased, sentence. The five flags use the thresholds from the settings sheet:
+Sentiment is off unless the framework sets `sentiment = true`, and it needs the optional
+package vaderSentiment. Each sentence then gets a VADER compound score between -1 and 1,
+computed on the original, not lowercased, sentence. Scores are cached in the database,
+so later runs only score new or changed sentences. The five flags use the thresholds from
+the settings sheet:
 
 | flag | true when (default thresholds) |
 |---|---|
@@ -281,7 +323,7 @@ All outputs are written to the `output` folder. In the TSV files, booleans are `
 | `results_document_clipped.tsv` | the same, capped at 1 (does the document contain the variable at all?) |
 | `results_document_percentage_of_sentences.tsv` | the same as a percentage of the document's sentences |
 | `results_document_sentiment.tsv` | per document, the mean compound score of the sentences in which each variable is true. **An empty cell means the variable never occurred in that document**; it is not a score of 0. Written only when sentiment is on. |
-| `results_sentences.tsv` | one row per sentence: `sentence_id`, `start`, `end`, `document`, `sentences` (lowercased, normalized), every list, `vader_compound` and the sentiment flags, every query, every variable |
+| `results_sentences.tsv` | one row per sentence: `sentence_id`, `structure`, `start`, `end`, `document`, `sentences` (lowercased, normalized), every list, `vader_compound` and the sentiment flags, every query, every variable |
 | `codebook.md` | the framework in readable form: meta, settings, variables, queries, lists with exclusions and notes |
 | `run_metadata.json` | how the results were made: CtrlFindr and package versions, config, framework meta, settings and SHA-256, test results, SHA-256 of every text file |
 | `validation_*.tsv` | see [Validation](#validation-against-hand-coding) |
@@ -290,8 +332,10 @@ All outputs are written to the `output` folder. In the TSV files, booleans are `
 Result files that the current settings no longer produce are removed, so the folder never
 mixes runs. The database (`analysis.sqlite`) has these tables:
 
-- `documents`: path, SHA-256 and cleaned text;
-- `sentences`: text, offsets and VADER score;
+- `documents`: path, format (`txt` or `md`), SHA-256 and cleaned text (for Markdown: the
+  plain text, one block per heading, item, row or paragraph);
+- `sentences`: text, structure label and offsets;
+- `sentiment`: cached VADER scores (only when a framework used sentiment);
 - `results_sentences`: a copy of the sentence results.
 
 `clean_text[start:end]` of a document is the sentence, so a flagged sentence can be read in
@@ -299,7 +343,8 @@ context.
 
 ## Text preparation
 
-The following is applied to every document:
+The following is applied to every document (for Markdown, after the Markdown syntax is
+removed):
 
 - **Encoding.** Files must be UTF-8; a byte-order mark, which some Windows editors add, is
   ignored. Other encodings stop ingestion with a list of the affected files, unless
@@ -327,7 +372,9 @@ every setting with comments. Relative paths are relative to the config file's fo
 
 The next ingest rebuilds the database when you:
 - change `text_cleaning` or `encoding_errors`;
-- upgrade CtrlFindr, pySBD or vaderSentiment.
+- upgrade CtrlFindr or pySBD.
+
+Upgrading vaderSentiment only clears the cached sentiment scores.
 
 ## Performance
 

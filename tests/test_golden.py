@@ -108,3 +108,17 @@ def test_end_to_end_example_matches_golden_v3(tmp_path):
     for name in OUTPUT_FILES:
         new = pd.read_csv(cfg.paths.output / f"{name}.tsv", sep="\t")
         assert_frames_equal(new, pd.read_csv(V3 / f"{name}.tsv", sep="\t"), name)
+
+
+def test_markdown_example(tmp_path):
+    from conftest import ROOT as root
+
+    src = root / "examples" / "markdown_project"
+    shutil.copytree(src / "Text_files", tmp_path / "Text_files")
+    shutil.copytree(src / "Input", tmp_path / "Input")
+    cfg = config_from_dict({"paths": {"framework": "Input/Assessment_framework.xlsx"}}, base=tmp_path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    res = pd.read_csv(cfg.paths.output / "results_sentences.tsv", sep="\t")
+    assert set(res["structure"]) == {"body", "list"}  # headers and table rows excluded by the framework
+    assert len(res) == 14 and res["1. Drought-related conflict"].sum() >= 2

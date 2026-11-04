@@ -10,12 +10,24 @@ from .spreadsheet import Dropdown, SheetSpec, write_workbook
 
 META_KEYS = ("format_version", "title", "version", "author", "language", "description")
 
+def _show(value) -> str:
+    """A setting value as written in the settings sheet."""
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, tuple):
+        return ", ".join(value)
+    return str(value)
+
+
 SETTING_NOTES = {
-    "sentiment": "true: score every sentence with VADER and allow the sentiment_* flags in expressions",
+    "sentiment": "true: score every sentence with VADER (optional package vaderSentiment) and allow the "
+                 "sentiment_* flags in expressions",
     "sentiment_positive_threshold": "VADER compound score at or above which a sentence is positive",
     "sentiment_negative_threshold": "VADER compound score at or below which a sentence is negative",
     "aggregate_children": "true: a variable is also true wherever one of its child variables is true",
     "tests_must_pass": "true: stop the analysis when a test in the tests sheet fails",
+    "exclude_sentence_types": "sentence types left out of the analysis, separated by commas: header, body, "
+                              "list, table (from .md files), unstructured (all sentences of .txt files)",
 }
 
 INSTRUCTIONS = [
@@ -30,7 +42,7 @@ INSTRUCTIONS = [
      "optional and are copied into run_metadata.json and the codebook; you may add your own.",
      "title | Climate security frameworks"),
     ("settings", "One setting per row; a missing row uses the default shown in this template.", "sentiment | true"),
-] + [("settings", f"{k}: {SETTING_NOTES[k]}.", f"default: {str(v).lower()}") for k, v in asdict(Settings()).items()] + [
+] + [("settings", f"{k}: {SETTING_NOTES[k]}.", f"default: {_show(v) or 'empty'}") for k, v in asdict(Settings()).items()] + [
     ("taxonomy", "One term per row: list name, term, optional note. Terms match whole words only.", "hazards | drought"),
     ("taxonomy", "* stands for any letters or digits, also none. It can appear anywhere in a term but never "
      "crosses a space or hyphen.", "flood* -> flood, floods, flooding"),
@@ -71,7 +83,7 @@ INSTRUCTIONS = [
 
 def template_sheets() -> list[SheetSpec]:
     settings_rows = [["key", "value", "note"]] + [
-        [k, str(v).lower(), SETTING_NOTES[k]] for k, v in asdict(Settings()).items()
+        [k, _show(v), SETTING_NOTES[k]] for k, v in asdict(Settings()).items()
     ]
     return [
         SheetSpec("instructions", [["sheet", "rule", "example"]] + [list(r) for r in INSTRUCTIONS], [3, 17, 8], wrap=True),

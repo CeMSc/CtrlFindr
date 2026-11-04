@@ -100,3 +100,45 @@ def test_long_segments_are_reported(small_fw, caplog):
 def test_config_has_no_sentiment_section(tmp_path):
     with pytest.raises(ValidationError, match="framework's settings sheet"):
         config_from_dict({"sentiment": {"enabled": True}}, base=tmp_path)
+
+
+def test_exclusion_changes_denominators(tmp_path):
+    path = make_framework(tmp_path / "fw.ods", TAX, QUERIES, VARIABLES, settings={"exclude_sentence_types": "header"})
+    (tmp_path / "Text_files").mkdir()
+    (tmp_path / "Text_files" / "d1.md").write_text("# Flood risk\n\nFlood risk rises. Calm.", encoding="utf-8")
+    cfg = config_from_dict({"paths": {"framework": str(path)}}, base=tmp_path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    res = pd.read_csv(cfg.paths.output / "results_sentences.tsv", sep="\t")
+    assert res["structure"].tolist() == ["body", "body"]  # the heading is gone
+    pct = pd.read_csv(cfg.paths.output / "results_document_percentage_of_sentences.tsv", sep="\t")
+    assert pct.loc[0, "1. Risk"] == 50.0  # 1 of 2 remaining sentences
+
+
+def test_sentiment_off_needs_no_vader(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "vaderSentiment", None)  # importing it would fail
+    path = make_framework(tmp_path / "fw.ods", TAX, [("q1", "NEAR(risk, flood, 2)")], [("1", "Risk", "q1")],
+                          settings={"sentiment": False})
+    cfg = project(tmp_path, path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    assert not (cfg.paths.output / "results_document_sentiment.tsv").exists()
+    assert "vader_compound" not in pd.read_csv(cfg.paths.output / "results_sentences.tsv", sep="\t").columns
+
+
+def test_sentiment_scores_are_cached(tmp_path, small_fw, monkeypatch):
+    from ctrlfindr import sentiment
+
+    calls = []
+    real = sentiment.score_texts
+    monkeypatch.setattr(sentiment, "score_texts", lambda texts: calls.append(len(texts)) or real(texts))
+    cfg = project(tmp_path, small_fw.path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    (tmp_path / "Text_files" / "d1.txt").write_text("Flood risk rises. The IPCC agrees. New one.", encoding="utf-8")
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    assert calls == [2, 3]  # second run used the cache; the changed document was rescored

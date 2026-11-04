@@ -142,6 +142,22 @@ class Evaluator:
         raise AssertionError(f)
 
 
+def exclude_sentences(sentences: pd.DataFrame, settings: Settings) -> pd.DataFrame:
+    """Drop the sentences whose structure label is in ``exclude_sentence_types``."""
+    if not settings.exclude_sentence_types or "structure" not in sentences:
+        return sentences
+    drop = sentences["structure"].isin(settings.exclude_sentence_types)
+    if drop.any():
+        counts = sentences.loc[drop, "structure"].value_counts()
+        log.info("Excluded %d sentence(s) by type: %s", int(drop.sum()),
+                 ", ".join(f"{k} {v}" for k, v in counts.items()))
+        gone = sorted(set(sentences.loc[drop, "document"]) - set(sentences.loc[~drop, "document"]))
+        if gone:
+            log.warning("%d document(s) have no sentences left after the exclusion and are not in the results: %s",
+                        len(gone), ", ".join(gone[:10]) + (" ..." if len(gone) > 10 else ""))
+    return sentences.loc[~drop].reset_index(drop=True)
+
+
 def analyze_sentences(
     sentences: pd.DataFrame,
     fw: Framework,
@@ -217,7 +233,7 @@ def analyze_sentences(
             )
 
     parts: dict[str, object] = {c: sentences[c].to_numpy()
-                                for c in ("sentence_id", "start", "end") if c in sentences}
+                                for c in ("sentence_id", "structure", "start", "end") if c in sentences}
     parts["document"] = sentences["document"].to_numpy()
     parts["sentences"] = np.array(text, dtype=object)
     for name in fw.lists:
@@ -248,10 +264,9 @@ def run_tests(fw: Framework) -> list[str]:
     })
     df["sentence_id"] = df.groupby("document").cumcount() + 1
     if fw.settings.sentiment:
-        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+        from .sentiment import score_texts
 
-        sia = SentimentIntensityAnalyzer()
-        df["vader_compound"] = [sia.polarity_scores(normalize_text(t))["compound"] for t in df["text"]]
+        df["vader_compound"] = score_texts([normalize_text(t) for t in df["text"]])
     res = analyze_sentences(df, fw, long_segment_words=0, check_hierarchy=False)
     matcher = Matcher(fw.lists)
     columns = {v.number: v.column for v in fw.variables}

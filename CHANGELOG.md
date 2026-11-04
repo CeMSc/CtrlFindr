@@ -48,6 +48,19 @@ effect of each change on the example project is quantified in
   processed.
 - **New output:** `codebook.md` with the framework in readable form.
 
+### Text inputs and sentiment
+
+- **Two input types:** `.txt` files are read as unstructured text, and `.md` files as
+  Markdown.
+- **Structure labels:** every sentence of a Markdown file is labelled `header`, `body`, `list`
+  or `table`, and every sentence of a text file `unstructured`. The label is stored and
+  exported in the `structure` column.
+- **Excluding sentence types:** the setting `exclude_sentence_types` leaves sentence types
+  out of the analysis.
+- **VADER is optional:** sentiment is off unless a framework sets `sentiment = true`;
+  vaderSentiment is an optional package; scores are computed during the analysis and cached
+  in the database.
+
 ### Changes that affect results
 
 - **Co-occurrence distance** (now `NEAR`) is the number of words *between* the two matches.
@@ -72,7 +85,7 @@ effect of each change on the example project is quantified in
 ### Changes to inputs and outputs
 
 - `vadar_compound` is renamed `vader_compound`.
-- `results_sentences.tsv` gains `sentence_id`, `start` and `end`.
+- `results_sentences.tsv` gains `sentence_id`, `structure`, `start` and `end`.
 - Variable names keep their capitalization in output headers.
 - The database file is `analysis.sqlite`. Source documents, sentences and results are
   separate tables. 2.1 overwrote the source table with results, so a second run failed.
