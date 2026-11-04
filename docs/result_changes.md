@@ -4,6 +4,12 @@ This report covers the example project (`examples/example_project`). It separate
 causes, so that each difference can be traced to one change. Every difference listed here
 is intended; none of them is suppressed in the tests.
 
+3.0 reads a new framework format. The 3.0 example framework expresses the 2.1 example's
+rules in that format: each co-occurrence is a `NEAR(...)` query, the document-level
+conditional is `doc_ipcc = DOC(ipcc)`, and each variable is an OR of its queries. The
+results below were produced with it. Column names are compared case-insensitively, because
+3.0 keeps the capitalization of variable names.
+
 ## A. Same sentences, new analysis
 
 Here the 3.0 analysis step was run on the sentences committed with 2.1, with the 2.1
