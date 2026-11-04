@@ -23,9 +23,21 @@ def test_a_pipe_without_separator_row_is_not_a_table():
 
 
 def test_body_paragraphs_quotes_code_and_rules():
-    md = "First line\nsecond line.\n\n> Quoted text.\n\n---\n\n```\ncode here\n```\n\n[^1]: Footnote text.\n[ref]: http://x.org"
-    assert blocks(md) == [("body", "First line second line."), ("body", "Quoted text."), ("body", "code here"),
-                          ("body", "Footnote text.")]
+    md = "First line\nsecond line.\n\n> Quoted text.\n\n---\n\n```\ncode here\n```\n\n[ref]: http://x.org"
+    assert blocks(md) == [("body", "First line second line."), ("body", "Quoted text."), ("body", "code here")]
+
+
+def test_footnotes_are_labelled_with_their_continuation():
+    md = ("Text.[^1]\n\n[^1]: First line\n    continued.\n\n    Second paragraph.\n[^2]: Other note.\n- item\n\n"
+          "Body again.\n\n    indented code is body, not a footnote")
+    assert blocks(md) == [("body", "Text."), ("footnote", "First line continued."), ("footnote", "Second paragraph."),
+                          ("footnote", "Other note."), ("list", "item"), ("body", "Body again."),
+                          ("body", "indented code is body, not a footnote")]
+
+
+def test_footnote_markers_are_removed():
+    assert inline_text("Emissions fell.[^1] The IPCC agreed.<sup>12</sup> Others disagreed.^3^ <SUP>a, b</SUP>") == \
+        "Emissions fell. The IPCC agreed. Others disagreed."
 
 
 def test_inline_markup_is_removed():

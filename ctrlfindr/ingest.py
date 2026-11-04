@@ -4,9 +4,9 @@ Two input types are read from the text files folder:
 
 * ``.txt`` files are plain, unstructured text. Every sentence gets the structure label
   ``unstructured``.
-* ``.md`` files are Markdown. Headings, list items, table rows and body text are told
-  apart (see ctrlfindr.markdown), Markdown syntax is removed, and every sentence gets the
-  label ``header``, ``list``, ``table`` or ``body``.
+* ``.md`` files are Markdown. Headings, list items, table rows, footnotes and body text are
+  told apart (see ctrlfindr.markdown), Markdown syntax is removed, and every sentence gets
+  the label ``header``, ``list``, ``table``, ``footnote`` or ``body``.
 
 Re-running ingest only processes files that are new or changed (by SHA-256) and removes
 documents whose files are gone. Changing the cleaning setting, or upgrading CtrlFindr or
@@ -36,7 +36,7 @@ log = logging.getLogger("ctrlfindr")
 INGEST_REVISION = 5
 SUFFIXES = {".txt": "txt", ".md": "md"}
 UNSTRUCTURED = "unstructured"
-STRUCTURE_LABELS = ("header", "body", "list", "table", UNSTRUCTURED)
+STRUCTURE_LABELS = ("header", "body", "list", "table", "footnote", UNSTRUCTURED)
 _SINGLE_SEGMENT = {"header", "table"}  # never split into several sentences
 
 _URL = re.compile(r"http\S+|www\S+|https\S+")

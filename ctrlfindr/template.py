@@ -27,7 +27,7 @@ SETTING_NOTES = {
     "aggregate_children": "true: a variable is also true wherever one of its child variables is true",
     "tests_must_pass": "true: stop the analysis when a test in the tests sheet fails",
     "exclude_sentence_types": "sentence types left out of the analysis, separated by commas: header, body, "
-                              "list, table (from .md files), unstructured (all sentences of .txt files)",
+                              "list, table, footnote (from .md files), unstructured (all sentences of .txt files)",
 }
 
 INSTRUCTIONS = [

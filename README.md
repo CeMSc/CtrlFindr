@@ -64,8 +64,8 @@ The results appear in `examples/example_project/Output/`. To start your own proj
    guide, and check it with `python -m ctrlfindr check --config ctrlfindr.toml`.
 4. Run `python -m ctrlfindr run --config ctrlfindr.toml`.
 
-`examples/markdown_project` shows Markdown input, with headings and table rows excluded
-from the analysis. From Jupyter, use [notebooks/CtrlFindr.ipynb](notebooks/CtrlFindr.ipynb).
+`examples/markdown_project` shows Markdown input, with headings, table rows and footnotes
+excluded from the analysis. From Jupyter, use [notebooks/CtrlFindr.ipynb](notebooks/CtrlFindr.ipynb).
 
 ## Text inputs
 
@@ -76,7 +76,7 @@ subfolders). Each file is one document, named after the file without its extensi
 | file | treated as | structure label of each sentence |
 |---|---|---|
 | `.txt` | unstructured plain text | `unstructured` |
-| `.md` | Markdown | `header`, `body`, `list` or `table` |
+| `.md` | Markdown | `header`, `body`, `list`, `table` or `footnote` |
 
 For Markdown files:
 
@@ -86,16 +86,27 @@ For Markdown files:
   split into sentences.
 - **table:** a table row (`| a | b |`). It is kept whole, with its cells joined by ` | `; the
   `|---|` separator row is dropped.
-- **body:** everything else (paragraphs, quotes, footnote texts, code blocks), split into
-  sentences.
+- **footnote:** the text of a footnote (`[^1]: …`), including its indented continuation lines
+  and further paragraphs, split into sentences.
+- **body:** everything else (paragraphs, quotes, code blocks), split into sentences.
 
 Markdown syntax is removed before matching: emphasis markers, link targets (the link text
-stays), images, inline code backticks, footnote references, HTML tags and entities.
-Horizontal rules and link definitions are dropped.
+stays), images, inline code backticks, HTML tags and entities, and footnote markers
+(`[^1]`, `<sup>12</sup>`, `^12^`). Horizontal rules and link definitions are dropped.
+
+The Markdown structure also helps the sentence splitter:
+
+- **Block boundaries end sentences.** Every heading, list item, table row, footnote and
+  paragraph boundary ends a sentence, even without a full stop.
+- **Headings and table rows are never split**, whatever full stops they contain
+  ("Fig. 3 Annual mean", "U.S. | 700").
+- **Markup is removed before splitting.** Link addresses and footnote markers cannot create
+  false boundaries (`IPCC.[^1] The` is split as "IPCC." | "The").
 
 The label is stored with every sentence and appears in the `structure` column of
 `results_sentences.tsv`. To leave sentence types out of the analysis altogether, set
-`exclude_sentence_types` in the framework's settings sheet, for example `header, table`.
+`exclude_sentence_types` in the framework's settings sheet, for example
+`header, table, footnote`.
 Excluded sentences are not coded and do not count in per-document totals or percentages.
 
 **JupyterLab server.** For long runs, start the command in a JupyterLab terminal rather than
@@ -152,7 +163,7 @@ file alone defines the coding. A missing row uses the default.
 | `sentiment_negative_threshold` | -0.05 | compound score at or below which a sentence is negative |
 | `aggregate_children` | false | a variable is also true wherever one of its child variables is true |
 | `tests_must_pass` | true | stop the analysis when a test sentence fails |
-| `exclude_sentence_types` | (none) | sentence types left out of the analysis, comma-separated: `header`, `body`, `list`, `table`, `unstructured` |
+| `exclude_sentence_types` | (none) | sentence types left out of the analysis, comma-separated: `header`, `body`, `list`, `table`, `footnote`, `unstructured` |
 
 ### taxonomy: terms
 

@@ -35,7 +35,7 @@ SENTIMENT_TERMS = (
     "sentiment_neutralnegative",
 )
 OUTPUT_COLUMNS = {"document", "sentences", "sentence_id", "structure", "start", "end", "vader_compound"}
-STRUCTURE_LABELS = ("header", "body", "list", "table", "unstructured")  # see ctrlfindr.ingest
+STRUCTURE_LABELS = ("header", "body", "list", "table", "footnote", "unstructured")  # see ctrlfindr.ingest
 RESERVED = OUTPUT_COLUMNS | set(SENTIMENT_TERMS)
 
 SHEETS = {

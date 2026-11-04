@@ -4,7 +4,7 @@
 
 ## Summary
 
-Recurring droughts reduce pasture and water for herders. Competition over these
+Recurring droughts reduce pasture and water for herders.[^1] Competition over these
 resources can turn into **violent conflict** when institutions are weak. This brief
 summarises the evidence and lists options for adaptation.
 
@@ -34,3 +34,6 @@ elder put it:
 Governments should invest in water infrastructure and in local mediation. Donors
 can support [community-based adaptation](https://example.org/adaptation) programmes
 that build resilience.
+
+[^1]: The figures in this brief are invented for the example; they describe no real
+    region or conflict.

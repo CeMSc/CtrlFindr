@@ -52,8 +52,9 @@ effect of each change on the example project is quantified in
 
 - **Two input types:** `.txt` files are read as unstructured text, and `.md` files as
   Markdown.
-- **Structure labels:** every sentence of a Markdown file is labelled `header`, `body`, `list`
-  or `table`, and every sentence of a text file `unstructured`. The label is stored and
+- **Structure labels:** every sentence of a Markdown file is labelled `header`, `body`, `list`,
+  `table` or `footnote`, and every sentence of a text file `unstructured`. Footnote markers
+  (`[^1]`, `<sup>12</sup>`, `^12^`) are removed from sentences. The label is stored and
   exported in the `structure` column.
 - **Excluding sentence types:** the setting `exclude_sentence_types` leaves sentence types
   out of the analysis.

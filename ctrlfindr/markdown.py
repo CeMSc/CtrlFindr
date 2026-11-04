@@ -6,11 +6,12 @@ Each block is ``(structure, text)`` with structure one of:
 * ``list``    one list item (``-``, ``*``, ``+``, ``1.`` or ``1)``), with its continuation lines;
 * ``table``   one table row (``| a | b |``); the separator row is dropped, cells are
               joined with `` | ``;
-* ``body``    everything else: paragraphs, block quotes, footnote texts, code blocks.
+* ``footnote`` the text of a footnote (``[^1]: ...``), with its indented continuation;
+* ``body``    everything else: paragraphs, block quotes, code blocks.
 
 Markdown syntax is removed from the text: emphasis markers, link targets (the link text is
-kept), images, inline code backticks, footnote references, HTML tags and entities, and
-backslash escapes. Horizontal rules are dropped.
+kept), images, inline code backticks, footnote markers (``[^1]``, ``<sup>12</sup>``,
+``^12^``), HTML tags and entities, and backslash escapes. Horizontal rules are dropped.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from __future__ import annotations
 import html
 import re
 
-STRUCTURES = ("header", "body", "list", "table")
+STRUCTURES = ("header", "body", "list", "table", "footnote")
 
 _ATX = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$|^ {0,3}(#{1,6})[ \t]*$")
 _SETEXT = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
@@ -33,7 +34,9 @@ _REF_DEF = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*\S+.*$")  # [label]: http://... 
 _INLINE = [
     (re.compile(r"!\[[^\]]*\]\([^)]*\)"), ""),                    # images
     (re.compile(r"!\[[^\]]*\]\[[^\]]*\]"), ""),
-    (re.compile(r"\[\^[^\]]+\]"), ""),                             # footnote references
+    (re.compile(r"\[\^[^\]]+\]"), ""),                             # footnote markers [^1]
+    (re.compile(r"<sup>\s*[\w,;\-–*†‡ ]{1,12}\s*</sup>", re.I), ""),  # footnote markers <sup>12</sup>
+    (re.compile(r"\^[\w,\-–*†‡]{1,12}\^"), ""),                     # footnote markers ^12^ (pandoc)
     (re.compile(r"\[([^\]]+)\]\([^)]*\)"), r"\1"),                 # [text](url)
     (re.compile(r"\[([^\]]+)\]\[[^\]]*\]"), r"\1"),                # [text][ref]
     (re.compile(r"<(https?://|www\.)[^>]+>"), ""),                 # <http://autolink>
@@ -76,7 +79,8 @@ def blocks(text: str) -> list[tuple[str, str]]:
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     out: list[tuple[str, str]] = []
     para: list[str] = []
-    item: list[str] | None = None
+    item: list[str] | None = None  # current list item or footnote
+    item_kind = "list"
 
     def flush_para() -> None:
         nonlocal para
@@ -87,7 +91,7 @@ def blocks(text: str) -> list[tuple[str, str]]:
     def flush_item() -> None:
         nonlocal item
         if item:
-            out.append(("list", " ".join(item)))
+            out.append((item_kind, " ".join(item)))
         item = None
 
     i = 0
@@ -111,6 +115,10 @@ def blocks(text: str) -> list[tuple[str, str]]:
         if not stripped:
             flush_para()
             flush_item()
+            i += 1
+            continue
+        if not para and item is None and out and out[-1][0] == "footnote" and re.match(r"( {4}|\t)", line):
+            item, item_kind = [stripped], "footnote"  # a further paragraph of the same footnote
             i += 1
             continue
         atx = _ATX.match(line)
@@ -143,14 +151,21 @@ def blocks(text: str) -> list[tuple[str, str]]:
                         out.append(("table", row))
                 i += 1
             continue
+        fn = _FOOTNOTE_DEF.match(line)
+        if fn:
+            flush_para()
+            flush_item()
+            item, item_kind = [fn.group(1)], "footnote"
+            i += 1
+            continue
         m = _ITEM.match(line)
         if m:
             flush_para()
             flush_item()
-            item = [m.group(3)]
+            item, item_kind = [m.group(3)], "list"
             i += 1
             continue
-        if item is not None:  # continuation of a list item (lazy or indented)
+        if item is not None:  # continuation of a list item or footnote (lazy or indented)
             item.append(stripped)
             i += 1
             continue
@@ -159,11 +174,10 @@ def blocks(text: str) -> list[tuple[str, str]]:
             para.append(q.group(1))
             i += 1
             continue
-        if _REF_DEF.match(line) and not _FOOTNOTE_DEF.match(line):
+        if _REF_DEF.match(line):  # [label]: http://... link definition
             i += 1
             continue
-        fn = _FOOTNOTE_DEF.match(line)
-        para.append(fn.group(1) if fn else stripped)
+        para.append(stripped)
         i += 1
     flush_para()
     flush_item()
