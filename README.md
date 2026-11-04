@@ -239,7 +239,7 @@ The tests include two regression checks:
 - the full pipeline on the example project must reproduce `tests/fixtures/golden_v3`.
 
 To compare two output folders, run `tools/compare_outputs.py OLD NEW`. GitHub Actions runs
-the tests on Windows and Linux with Python 3.11 and 3.13.
+the tests on Windows and Linux with Python 3.11, 3.12 and 3.13.
 
 ## License
 
