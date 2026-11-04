@@ -9,7 +9,7 @@ from ctrlfindr import query as q
     ('(("a")AND("b"))OR"c"', "(a AND b) OR c"),
     ('NEAR(fast OR {storm*}, hwc, 5)', "NEAR(fast OR {storm*}, hwc, 5)"),
     ('doc(ipcc) >= 3 and doc_share(a1)>=0.05', "DOC(ipcc) >= 3 AND DOC_SHARE(a1) >= 0.05"),
-    ('doc(x)', "DOC(x)"), ('PARAGRAPH(x) > 2', "PARAGRAPH(x) > 2"), ('WINDOW(c, 2) AND d', "WINDOW(c, 2) AND d"),
+    ('doc(x)', "DOC(x)"), ('DOC(x) > 2', "DOC(x) > 2"), ('WINDOW(c, 2) AND d', "WINDOW(c, 2) AND d"),
     ('count_distinct(h) >= 2', "COUNT_DISTINCT(h) >= 2"), ('V(2.1) or V(2.2)', "V(2.1) OR V(2.2)"),
     ('not_near(a, b, 3)', "NOT_NEAR(a, b, 3)"), ('before(a, b, 0)', "BEFORE(a, b, 0)"),
     ('"command-and-control"', "command-and-control"),                  # operator words inside names stay
@@ -26,6 +26,12 @@ def test_precedence_not_and_or():
 
 def test_function_name_without_parenthesis_is_a_name():
     assert q.parse("near") == q.Name("near")
+
+
+def test_paragraph_is_not_a_function():
+    assert q.parse("paragraph") == q.Name("paragraph")  # an ordinary name now
+    with pytest.raises(q.QuerySyntaxError):
+        q.parse("PARAGRAPH(x)")
 
 
 def test_bare_count_means_at_least_one():

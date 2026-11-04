@@ -42,7 +42,7 @@ def sentiment_flags(compound: np.ndarray, settings: Settings) -> dict[str, np.nd
 class Evaluator:
     """Holds the per-sentence columns and evaluates expressions over them."""
 
-    def __init__(self, fw: Framework, text: list[str], documents: np.ndarray, paragraphs: np.ndarray):
+    def __init__(self, fw: Framework, text: list[str], documents: np.ndarray):
         self.fw = fw
         self.text = text
         self.n = len(text)
@@ -50,7 +50,6 @@ class Evaluator:
         if self.n and np.count_nonzero(np.diff(self.doc)) != self.doc.max():
             # WINDOW and the document functions need the rows of a document to be contiguous
             raise CtrlFindrError("the sentences of each document must be consecutive rows")
-        self.para = pd.factorize(pd.Series(list(zip(documents, paragraphs))))[0] if self.n else np.zeros(0, int)
         self.columns: dict[str, np.ndarray] = {}
         self.matches: dict[str, list[list[Match] | None]] = {}
         self.variables: dict[str, np.ndarray] = {}
@@ -126,9 +125,9 @@ class Evaluator:
             hi = np.minimum(idx + k, self.doc_last)
             return (cs[hi + 1] - cs[lo]) > 0
         cmp = _COMPARE[node.op]
-        if f in ("doc", "paragraph"):
+        if f == "doc":
             inner = self.evaluate(node.args[0])
-            counts = self._group_count(self.doc if f == "doc" else self.para, inner)
+            counts = self._group_count(self.doc, inner)
             return cmp(counts, node.value)
         if f == "doc_share":
             inner = self.evaluate(node.args[0])
@@ -153,14 +152,13 @@ def analyze_sentences(
     """Code every sentence.
 
     ``sentences`` needs ``document`` and ``text`` columns, ``vader_compound`` when the
-    framework uses sentiment, and optionally ``paragraph`` (default 1) and
-    ``sentence_id``/``start``/``end``, which are carried through.
+    framework uses sentiment, and optionally ``sentence_id``/``start``/``end``, which
+    are carried through.
     """
     sentences = sentences.reset_index(drop=True)
     text = [normalize_text(t).lower() for t in sentences["text"].fillna("").astype(str)]
     n = len(text)
-    paragraphs = sentences["paragraph"].to_numpy() if "paragraph" in sentences else np.ones(n, dtype=int)
-    ev = Evaluator(fw, text, sentences["document"].to_numpy(), paragraphs)
+    ev = Evaluator(fw, text, sentences["document"].to_numpy())
 
     matcher = Matcher(fw.all_lists)
     needed = {name for lists in fw.set_lists.values() for name in lists}
@@ -219,7 +217,7 @@ def analyze_sentences(
             )
 
     parts: dict[str, object] = {c: sentences[c].to_numpy()
-                                for c in ("sentence_id", "paragraph", "start", "end") if c in sentences}
+                                for c in ("sentence_id", "start", "end") if c in sentences}
     parts["document"] = sentences["document"].to_numpy()
     parts["sentences"] = np.array(text, dtype=object)
     for name in fw.lists:
@@ -246,7 +244,6 @@ def run_tests(fw: Framework) -> list[str]:
     cases = sorted(fw.tests, key=lambda t: groups.index(t.group))  # rows of a group together
     df = pd.DataFrame({
         "document": [t.group for t in cases],
-        "paragraph": [t.paragraph for t in cases],
         "text": [t.sentence for t in cases],
     })
     df["sentence_id"] = df.groupby("document").cumcount() + 1

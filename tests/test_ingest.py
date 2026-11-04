@@ -37,8 +37,6 @@ def test_crlf_and_bom(tmp_path):
     ingest.run(cfg, show_progress=False)
     texts = [r[4] for r in sentences(cfg)]
     assert texts == ["First line.", "Second line.", "New paragraph."]
-    with sqlite3.connect(cfg.paths.database) as conn:
-        assert [r[0] for r in conn.execute("SELECT paragraph FROM sentences ORDER BY sentence_id")] == [1, 1, 2]
 
 
 def test_offsets_point_into_clean_text(tmp_path):

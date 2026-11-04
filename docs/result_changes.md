@@ -66,7 +66,7 @@ The example corpus goes from 1,589 to 1,692 sentences (+6.5%), for these reasons
 - **Line breaks.** 2.1 deleted line breaks that were followed by a capital letter or digit,
   which glued words together (`securityclimate`, `historyhuman`, `definitionclimate`, ...).
   Such words never match. 3.0 turns every line break into a space.
-- **Paragraphs.** A blank line now always ends a sentence. Headings such as "See also" or
+- **Blank lines.** A blank line now always ends a sentence. Headings such as "See also" or
   "Terminology" become their own short segments; in 2.1 they were glued onto the next
   sentence.
 - **Splitter.** pySBD replaces NLTK punkt. Its boundaries differ in places (abbreviations,

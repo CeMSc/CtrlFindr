@@ -133,9 +133,9 @@ def test_explicit_parent_overrides_numbering(tmp_path):
 
 
 def test_tests_sheet_parsing(tmp_path):
-    fw = load_framework(build(tmp_path, tests=[("Floods came.", "fast, a1, 1", "slow", "g1", "2")]))
+    fw = load_framework(build(tmp_path, tests=[("Floods came.", "fast, a1, 1", "slow", "g1")]))
     t = fw.tests[0]
-    assert (t.expect_true, t.expect_false, t.group, t.paragraph) == (("fast", "a1", "1"), ("slow",), "g1", 2)
+    assert (t.expect_true, t.expect_false, t.group) == (("fast", "a1", "1"), ("slow",), "g1")
     text = problems(tmp_path, tests=[("Floods.", "fast, nothing", ""), ("No expectations.", "", ""),
                                      ("Context only.", "", "", "g1")])
     assert "names 'nothing'" in text and "row 3: the test has no expect_true" in text and "row 4" not in text

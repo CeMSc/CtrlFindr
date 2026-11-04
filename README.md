@@ -3,8 +3,8 @@
 CtrlFindr is a toolkit for dictionary-based **content analysis** of English text documents.
 It splits each document into sentences and codes every sentence against an *assessment
 framework* that you write in a spreadsheet (LibreOffice `.ods` or Excel `.xlsx`). The
-framework combines lists of terms, proximity rules, document- and paragraph-level
-conditions, counts and sentiment into variables, and the results are exported as tables per
+framework combines lists of terms, proximity rules, document-level conditions, counts
+and sentiment into variables, and the results are exported as tables per
 document and per sentence.
 
 Version 3.0 is a rewrite of the 2.x notebook with a new framework format; 2.x frameworks
@@ -76,7 +76,7 @@ A framework is one spreadsheet with these sheets (the template has them all):
 | `taxonomy` | list, term, note | the terms, one per row |
 | `queries` | name, query, note | named expressions over lists, queries and sentiment |
 | `variables` | number, name, definition, parent, note | the exported results |
-| `tests` | sentence, expect_true, expect_false, group, paragraph, note | example sentences checked on every run (optional) |
+| `tests` | sentence, expect_true, expect_false, group, note | example sentences checked on every run (optional) |
 | `instructions` | | the rules in short; ignored by CtrlFindr |
 
 Cells are read as displayed (`1.10` stays `1.10`; a decimal comma `1,1` is read as `1.1`).
@@ -91,7 +91,7 @@ must be unique. The reserved names are:
 - the operators `and`, `or`, `not`;
 - the function names below;
 - the sentiment flags;
-- `document`, `sentences`, `sentence_id`, `paragraph`, `start`, `end`, `vader_compound`.
+- `document`, `sentences`, `sentence_id`, `start`, `end`, `vader_compound`.
 
 Variable names are free text, because variables are referred to by number.
 
@@ -158,7 +158,6 @@ Functions:
 | `NOT_NEAR(a, b, n)` | some match of a has no match of b within n words. `NOT NEAR(a, b, n)` instead means no pair is near. |
 | `DOC(x)`, `DOC(x) >= n` | x is true in at least one (n) sentence(s) of the same document |
 | `DOC_SHARE(x) >= p` | x is true in at least the share p (0–1) of the document's sentences |
-| `PARAGRAPH(x)`, `PARAGRAPH(x) >= n` | as DOC, within the same paragraph (paragraphs are separated by blank lines) |
 | `WINDOW(x, k)` | x is true in this sentence or within k sentences before or after it, in the same document |
 | `COUNT(a) >= n` | a has at least n matches in the sentence |
 | `COUNT_DISTINCT(a) >= n` | at least n different terms of a match in the sentence |
@@ -170,8 +169,8 @@ Rules for the arguments:
   does not. Overlapping matches never count, so a word in both lists is not near itself.
 - **The `a` and `b` arguments need word positions.** They must be lists, `{terms}` or OR
   combinations of these, possibly through a query defined that way.
-- **Comparisons** are `>=`, `>`, `=`, `!=`, `<=` and `<`. Without one, `DOC(x)`,
-  `PARAGRAPH(x)` and `COUNT(x)` mean ≥ 1, and `DOC_SHARE(x)` means > 0.
+- **Comparisons** are `>=`, `>`, `=`, `!=`, `<=` and `<`. Without one, `DOC(x)` and
+  `COUNT(x)` mean ≥ 1, and `DOC_SHARE(x)` means > 0.
 - **In COUNT and COUNT_DISTINCT,** a match lying inside a longer match of the same list
   counts once ("climate change" is counted once by `climat*` and `climate change`). Each
   taxonomy row is one term for COUNT_DISTINCT.
@@ -206,20 +205,19 @@ The output columns are named `1. Climate change`, `1.1 Fast onset` and so on.
 
 ### tests
 
-| sentence | expect_true | expect_false | group | paragraph |
-|---|---|---|---|---|
-| Floods and storms destroyed the harvest. | fast, a1, 1.1 | slow, a2 | | |
-| The IPCC published its assessment report. | | | ipcc-doc | |
-| Floods led to human-wildlife conflict. | b2, 2.1.2 | b1 | ipcc-doc | |
+| sentence | expect_true | expect_false | group |
+|---|---|---|---|
+| Floods and storms destroyed the harvest. | fast, a1, 1.1 | slow, a2 | |
+| The IPCC published its assessment report. | | | ipcc-doc |
+| Floods led to human-wildlife conflict. | b2, 2.1.2 | b1 | ipcc-doc |
 
 - **When the tests run:** test sentences go through the same normalization and coding as
   the corpus on every `check`, `analyze` and `run`.
 - **Expectations** name lists, queries, sentiment flags or variable numbers, separated by
   commas.
-- **Groups:** rows with the same `group` form one document, in order, so `DOC`, `WINDOW`
-  and `PARAGRAPH` can be tested. A row in a group may carry no expectations and only
-  provide context, like the IPCC sentence above. `paragraph` numbers paragraphs within a
-  group.
+- **Groups:** rows with the same `group` form one document, in order, so `DOC`, `DOC_SHARE`
+  and `WINDOW` can be tested. A row in a group may carry no expectations and only
+  provide context, like the IPCC sentence above.
 - **Failures** name the row, the lists that matched and the values behind the failing
   query. With `tests_must_pass = true` (default) the analysis stops.
 
@@ -283,7 +281,7 @@ All outputs are written to the `output` folder. In the TSV files, booleans are `
 | `results_document_clipped.tsv` | the same, capped at 1 (does the document contain the variable at all?) |
 | `results_document_percentage_of_sentences.tsv` | the same as a percentage of the document's sentences |
 | `results_document_sentiment.tsv` | per document, the mean compound score of the sentences in which each variable is true. **An empty cell means the variable never occurred in that document**; it is not a score of 0. Written only when sentiment is on. |
-| `results_sentences.tsv` | one row per sentence: `sentence_id`, `paragraph`, `start`, `end`, `document`, `sentences` (lowercased, normalized), every list, `vader_compound` and the sentiment flags, every query, every variable |
+| `results_sentences.tsv` | one row per sentence: `sentence_id`, `start`, `end`, `document`, `sentences` (lowercased, normalized), every list, `vader_compound` and the sentiment flags, every query, every variable |
 | `codebook.md` | the framework in readable form: meta, settings, variables, queries, lists with exclusions and notes |
 | `run_metadata.json` | how the results were made: CtrlFindr and package versions, config, framework meta, settings and SHA-256, test results, SHA-256 of every text file |
 | `validation_*.tsv` | see [Validation](#validation-against-hand-coding) |
@@ -293,7 +291,7 @@ Result files that the current settings no longer produce are removed, so the fol
 mixes runs. The database (`analysis.sqlite`) has these tables:
 
 - `documents`: path, SHA-256 and cleaned text;
-- `sentences`: text, paragraph, offsets and VADER score;
+- `sentences`: text, offsets and VADER score;
 - `results_sentences`: a copy of the sentence results.
 
 `clean_text[start:end]` of a document is the sentence, so a flagged sentence can be read in
@@ -308,7 +306,8 @@ The following is applied to every document:
   `encoding_errors = "replace"` is set.
 - **Normalization.** Unicode NFKC plus the dash and quote folding described above.
 - **Line breaks.** A single line break becomes a space, so words at line ends are never
-  glued together. A blank line ends a paragraph, and sentences never cross paragraphs.
+  glued together. A blank line always ends a sentence, so headings are not glued
+  onto the next sentence.
 - **Citation marks.** A space is inserted between a full stop and a following citation mark
   (`2050.[4] The` → `2050. [4] The`) so that the sentence splitter separates the sentences.
 - **Junk segments.** Segments that contain no letter (page numbers, `[12]`, lone

@@ -30,7 +30,7 @@ effect of each change on the example project is quantified in
   - names with or without quotes;
   - `{term}` for inline terms;
   - `NEAR`, `BEFORE`, `NOT_NEAR`;
-  - `DOC`, `DOC_SHARE`, `PARAGRAPH`, `WINDOW`;
+  - `DOC`, `DOC_SHARE`, `WINDOW`;
   - `COUNT` and `COUNT_DISTINCT` with comparisons;
   - queries may use other queries.
 - **variables:**
@@ -46,8 +46,7 @@ effect of each change on the example project is quantified in
 - **Names** follow one rule (a letter first, then letters, digits, `_`, `-`), with suggested
   fixes. All problems are reported together with sheet and row, before any text is
   processed.
-- **New outputs:** `codebook.md` with the framework in readable form, and a `paragraph`
-  column in `results_sentences.tsv`.
+- **New output:** `codebook.md` with the framework in readable form.
 
 ### Changes that affect results
 
@@ -73,7 +72,7 @@ effect of each change on the example project is quantified in
 ### Changes to inputs and outputs
 
 - `vadar_compound` is renamed `vader_compound`.
-- `results_sentences.tsv` gains `sentence_id`, `paragraph`, `start` and `end`.
+- `results_sentences.tsv` gains `sentence_id`, `start` and `end`.
 - Variable names keep their capitalization in output headers.
 - The database file is `analysis.sqlite`. Source documents, sentences and results are
   separate tables. 2.1 overwrote the source table with results, so a second run failed.

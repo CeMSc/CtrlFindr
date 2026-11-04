@@ -25,7 +25,7 @@ INSTRUCTIONS = [
     ("names", "Lists and queries share one set of names: start with a letter; then letters, digits, _ or -. "
      "Each name must be unique.", "fast_onset, co-slow, a1"),
     ("names", "Reserved names: and, or, not, the function names below, the sentiment_* flags, document, "
-     "sentences, sentence_id, paragraph, start, end, vader_compound.", ""),
+     "sentences, sentence_id, start, end, vader_compound.", ""),
     ("meta", "One key per row. format_version is required and must stay " + FORMAT_VERSION + ". Other keys are "
      "optional and are copied into run_metadata.json and the codebook; you may add your own.",
      "title | Climate security frameworks"),
@@ -51,7 +51,6 @@ INSTRUCTIONS = [
      "sentences.", "hwc AND DOC(ipcc) >= 3"),
     ("queries", "DOC_SHARE(x) >= p: x is true in at least this share (0 to 1) of the document's sentences.",
      "DOC_SHARE(climate) >= 0.05"),
-    ("queries", "PARAGRAPH(x): x is true in a sentence of the same paragraph (also with >= n).", "PARAGRAPH(ipcc)"),
     ("queries", "WINDOW(x, k): x is true in this sentence or within k sentences before or after it.",
      "drought AND WINDOW(conflict, 1)"),
     ("queries", "COUNT(a) >= n: at least n matches of a in the sentence. COUNT_DISTINCT(a) >= n: at least n "
@@ -64,8 +63,8 @@ INSTRUCTIONS = [
      "may stay empty.", ""),
     ("tests", "Example sentences checked on every run. expect_true / expect_false: lists, queries, sentiment flags "
      "or variable numbers, separated by commas.", "Floods hit the coast. | fast, 1.1 | slow"),
-    ("tests", "group: rows with the same group form one document, in order (for DOC, WINDOW, PARAGRAPH). "
-     "paragraph: optional paragraph number within the group.", "group: doc1"),
+    ("tests", "group: rows with the same group form one document, in order (for DOC, DOC_SHARE and WINDOW). "
+     "A row in a group may have no expectations and only provide context.", "group: doc1"),
     ("instructions", "This sheet is ignored by CtrlFindr.", ""),
 ]
 
@@ -85,8 +84,8 @@ def template_sheets() -> list[SheetSpec]:
         SheetSpec("queries", [["name", "query", "note"]], [5, 16, 10]),
         SheetSpec("variables", [["number", "name", "definition", "parent", "note"]], [2.5, 8, 12, 2.5, 8],
                   dropdowns=[Dropdown(3, source=("variables", "A"), rows=500)]),
-        SheetSpec("tests", [["sentence", "expect_true", "expect_false", "group", "paragraph", "note"]],
-                  [14, 6, 6, 3, 2.5, 8]),
+        SheetSpec("tests", [["sentence", "expect_true", "expect_false", "group", "note"]],
+                  [14, 6, 6, 3, 8]),
     ]
 
 

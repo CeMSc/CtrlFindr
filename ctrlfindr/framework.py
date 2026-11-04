@@ -8,7 +8,7 @@ settings     key*, value*, note           coding settings (optional sheet; defau
 taxonomy     list*, term*, note           one row per term; "-phrase" / "-@list" exclude
 queries      name*, query*, note          named expressions (see ctrlfindr.query)
 variables    number*, name*, definition, parent, note
-tests        sentence*, expect_true, expect_false, group, paragraph, note   (optional)
+tests        sentence*, expect_true, expect_false, group, note   (optional)
 instructions (ignored)
 
 Everything is checked before any text is processed and all problems are reported together,
@@ -34,7 +34,7 @@ SENTIMENT_TERMS = (
     "sentiment_negative",
     "sentiment_neutralnegative",
 )
-OUTPUT_COLUMNS = {"document", "sentences", "sentence_id", "paragraph", "start", "end", "vader_compound"}
+OUTPUT_COLUMNS = {"document", "sentences", "sentence_id", "start", "end", "vader_compound"}
 RESERVED = OUTPUT_COLUMNS | set(SENTIMENT_TERMS)
 
 SHEETS = {
@@ -43,7 +43,7 @@ SHEETS = {
     "taxonomy": (("list", "term"), ("note",)),
     "queries": (("name", "query"), ("note",)),
     "variables": (("number", "name"), ("definition", "parent", "note")),
-    "tests": (("sentence",), ("expect_true", "expect_false", "group", "paragraph", "note")),
+    "tests": (("sentence",), ("expect_true", "expect_false", "group", "note")),
 }
 REQUIRED_SHEETS = ("meta", "taxonomy", "queries", "variables")
 
@@ -90,7 +90,6 @@ class Variable:
 class TestCase:
     row: int
     group: str
-    paragraph: int
     sentence: str
     expect_true: tuple[str, ...]
     expect_false: tuple[str, ...]
@@ -465,12 +464,7 @@ def load_framework(path: str | Path) -> Framework:
         if not expect["expect_true"] and not expect["expect_false"] and not rec["group"]:
             # rows in a group may be context only (e.g. the sentence that makes DOC(x) true)
             problems.append(f"{where}: the test has no expect_true or expect_false entries (and no group)")
-        try:
-            paragraph = int(float(rec["paragraph"])) if rec["paragraph"] else 1
-        except ValueError:
-            problems.append(f"{where}: paragraph {rec['paragraph']!r} must be a whole number")
-            paragraph = 1
-        tests.append(TestCase(i, rec["group"] or f"row {i}", paragraph, rec["sentence"],
+        tests.append(TestCase(i, rec["group"] or f"row {i}", rec["sentence"],
                               expect["expect_true"], expect["expect_false"], rec["note"]))
 
     # exclusion loops between lists

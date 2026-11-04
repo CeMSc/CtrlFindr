@@ -5,10 +5,10 @@
     not_expr  := NOT not_expr | primary
     primary   := name | "quoted name" | {term} | ( expr ) | call [compare]
     call      := NEAR(set, set, n) | BEFORE(set, set, n) | NOT_NEAR(set, set, n)
-               | DOC(expr) | DOC_SHARE(expr) | PARAGRAPH(expr) | WINDOW(expr, n)
+               | DOC(expr) | DOC_SHARE(expr) | WINDOW(expr, n)
                | COUNT(set) | COUNT_DISTINCT(set) | V(variable number)
-    compare   := (>= | > | = | != | <= | <) number      (after DOC, DOC_SHARE, PARAGRAPH,
-                                                        COUNT, COUNT_DISTINCT only)
+    compare   := (>= | > | = | != | <= | <) number      (after DOC, DOC_SHARE, COUNT,
+                                                        COUNT_DISTINCT only)
 
 Keywords are case-insensitive. ``not`` binds tighter than ``and``, ``and`` tighter than
 ``or``. A *set* is something with word positions: a list, a {term}, or an OR of those
@@ -30,7 +30,6 @@ FUNCTIONS: dict[str, tuple[tuple[str, ...], bool]] = {
     "not_near": (("set", "set", "int"), False),
     "doc": (("expr",), True),
     "doc_share": (("expr",), True),
-    "paragraph": (("expr",), True),
     "window": (("expr", "int"), False),
     "count": (("set",), True),
     "count_distinct": (("set",), True),

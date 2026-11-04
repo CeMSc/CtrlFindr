@@ -11,10 +11,9 @@ from fwutil import make_framework
 TAX = [("haz", "flood*"), ("haz", "drought*"), ("haz", "storm*"), ("conflict", "conflict*"), ("conflict", "clash*"),
        ("ipcc", "ipcc"), ("clim", "climat*"), ("clim", "-business climate"), ("wild", "wildlife")]
 
-# document d1: 3 sentences, 2 paragraphs; document d2: 2 sentences
+# document d1: 3 sentences; document d2: 2 sentences
 SENTENCES = pd.DataFrame({
     "document": ["d1", "d1", "d1", "d2", "d2"],
-    "paragraph": [1, 1, 2, 1, 1],
     "text": [
         "Floods and droughts caused conflict.",                       # 0
         "The IPCC warned about the business climate.",                # 1
@@ -63,8 +62,6 @@ def test_proximity(tmp_path, query, expected):
     ("DOC(conflict) >= 2", [False, False, False, True, True]),
     ("DOC_SHARE(haz) >= 0.5", [False, False, False, True, True]),
     ("DOC_SHARE(haz) > 0.3", [True, True, True, True, True]),
-    ("PARAGRAPH(ipcc)", [True, True, False, False, False]),
-    ("PARAGRAPH(haz) = 0", [False, False, True, False, False]),
     ("WINDOW(ipcc, 1)", [True, True, True, False, False]),
     ("WINDOW(haz, 1) AND NOT haz", [False, True, False, False, True]),  # windows stop at document boundaries
     ("COUNT(haz) >= 3", [False, False, False, True, False]),
@@ -111,7 +108,7 @@ def test_hierarchy_warning(tmp_path, caplog):
 
 def test_output_columns(tmp_path):
     res, fw = run(tmp_path, [("q", "haz")])
-    assert list(res.columns)[:3] == ["paragraph", "document", "sentences"]
+    assert list(res.columns)[:2] == ["document", "sentences"]
     assert "{caus*}" not in res.columns  # inline terms are not exported
     assert list(res.columns)[-1] == "1. All"
 

@@ -23,11 +23,11 @@ from .config import Config
 log = logging.getLogger("ctrlfindr")
 
 # Bump when cleaning or segmentation logic changes, so existing databases are rebuilt.
-INGEST_REVISION = 3
+INGEST_REVISION = 4
 
 _URL = re.compile(r"http\S+|www\S+|https\S+")
 _ELLIPSIS = re.compile(r"\.{2,}")
-_PARAGRAPH_BREAK = re.compile(r"[^\S\n]*\n(?:[^\S\n]*\n)+[^\S\n]*")  # a blank line
+_BLANK_LINE = re.compile(r"[^\S\n]*\n(?:[^\S\n]*\n)+[^\S\n]*")  # one or more blank lines
 _LINE_BREAK = re.compile(r"(?<!\n)\n(?!\n)")  # a single line break (not a blank line)
 _SPACES = re.compile(r"[^\S\n]+")  # runs of whitespace other than line breaks
 _CITATION_AFTER_STOP = re.compile(r"(?<=[.!?])(?=\[\d)")  # "2050.[4] The" -> "2050. [4] The"
@@ -36,8 +36,7 @@ _SCHEMA = (
     f"""CREATE TABLE IF NOT EXISTS {DOCUMENTS} (
         document TEXT PRIMARY KEY, path TEXT NOT NULL, sha256 TEXT NOT NULL, clean_text TEXT NOT NULL)""",
     f"""CREATE TABLE IF NOT EXISTS {SENTENCES} (
-        document TEXT NOT NULL, sentence_id INTEGER NOT NULL, paragraph INTEGER NOT NULL,
-        start INTEGER NOT NULL, "end" INTEGER NOT NULL,
+        document TEXT NOT NULL, sentence_id INTEGER NOT NULL, start INTEGER NOT NULL, "end" INTEGER NOT NULL,
         text TEXT NOT NULL, vader_compound REAL NOT NULL, PRIMARY KEY (document, sentence_id))""",
     f"CREATE TABLE IF NOT EXISTS {META} (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 )
@@ -52,7 +51,6 @@ class SourceFile:
 @dataclass(frozen=True)
 class Sentence:
     sentence_id: int
-    paragraph: int
     start: int
     end: int
     text: str
@@ -85,24 +83,25 @@ def decode(data: bytes, errors: str) -> str:
 def clean_document(raw: str, text_cleaning: bool = True) -> str:
     """Normalize a document. Sentence offsets refer to the string returned here.
 
-    Always: NFKC normalization and dash/quote folding; a blank line becomes a paragraph
-    break (``\\n\\n``); any other run of whitespace, including a single line break, becomes
+    Always: NFKC normalization and dash/quote folding; blank lines become ``\\n\\n``, where a
+    sentence always ends; any other run of whitespace, including a single line break, becomes
     one space; a space is inserted between a full stop and a following citation mark
-    (``2050.[4] The``), which the sentence splitter would otherwise not split. With ``text_cleaning``: URLs are removed and ``..``/``...`` become ``.``.
+    (``2050.[4] The``), which the sentence splitter would otherwise not split.
+    With ``text_cleaning``: URLs are removed and ``..``/``...`` become ``.``.
     """
     text = normalize_text(raw).replace("\r\n", "\n").replace("\r", "\n")
     if text_cleaning:
         text = _URL.sub("", text)
         text = _ELLIPSIS.sub(".", text)
     text = _CITATION_AFTER_STOP.sub(" ", text)
-    text = _PARAGRAPH_BREAK.sub("\n\n", text)
+    text = _BLANK_LINE.sub("\n\n", text)
     text = _LINE_BREAK.sub(" ", text)
     text = _SPACES.sub(" ", text)
     return text.strip()
 
 
 class Segmenter:
-    """pySBD sentence splitting, paragraph by paragraph, with character offsets."""
+    """pySBD sentence splitting with character offsets; a blank line always ends a sentence."""
 
     def __init__(self) -> None:
         import pysbd
@@ -112,20 +111,20 @@ class Segmenter:
     def split(self, text: str) -> list[Sentence]:
         out: list[Sentence] = []
         pos = 0
-        for p_no, para in enumerate(text.split("\n\n"), start=1):
+        for block in text.split("\n\n"):
             cursor = 0
-            for piece in self._seg.segment(para) if para.strip() else ():
+            for piece in self._seg.segment(block) if block.strip() else ():
                 s = piece.strip()
                 if not s:
                     continue
-                k = para.find(s, cursor)
+                k = block.find(s, cursor)
                 if k < 0:  # pySBD altered the text; should not happen with clean=False
                     raise RuntimeError(f"sentence splitter changed the text near: {s[:60]!r}")
                 cursor = k + len(s)
                 if not any(ch.isalpha() for ch in s):  # numbers, punctuation, "[12]" citation marks
                     continue
-                out.append(Sentence(len(out) + 1, p_no, pos + k, pos + k + len(s), s))
-            pos += len(para) + 2
+                out.append(Sentence(len(out) + 1, pos + k, pos + k + len(s), s))
+            pos += len(block) + 2
         return out
 
 
@@ -156,7 +155,7 @@ def _prepare_db(conn: sqlite3.Connection, signature: str) -> dict[str, str]:
         return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
 
     expected = {DOCUMENTS: ["document", "path", "sha256", "clean_text"],
-                SENTENCES: ["document", "sentence_id", "paragraph", "start", "end", "text", "vader_compound"]}
+                SENTENCES: ["document", "sentence_id", "start", "end", "text", "vader_compound"]}
     stored = None
     if columns(META) == ["key", "value"]:
         row = conn.execute(f"SELECT value FROM {META} WHERE key='ingest_signature'").fetchone()
@@ -239,9 +238,9 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
                     (d, str(f.path), digest, text),
                 )
                 conn.executemany(
-                    f'INSERT INTO {SENTENCES} (document, sentence_id, paragraph, start, "end", text, vader_compound) '
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [(d, s.sentence_id, s.paragraph, s.start, s.end, s.text, sia.polarity_scores(s.text)["compound"])
+                    f'INSERT INTO {SENTENCES} (document, sentence_id, start, "end", text, vader_compound) '
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    [(d, s.sentence_id, s.start, s.end, s.text, sia.polarity_scores(s.text)["compound"])
                      for s in sents],
                 )
                 n_sent += len(sents)
