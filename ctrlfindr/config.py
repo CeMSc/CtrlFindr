@@ -89,6 +89,9 @@ def _build(raw: dict[str, Any], base: Path, problems: list[str]) -> Config:
                 if isinstance(v, bool) or not isinstance(v, (int, float)):
                     problems.append(f"[{section}] {key} must be a number")
                     continue
+                if isinstance(default, int) and v != int(v):
+                    problems.append(f"[{section}] {key} must be a whole number")
+                    continue
                 v = type(default)(v)
             setattr(target, key, v)
     for key in cfg.paths.__dataclass_fields__:

@@ -23,10 +23,36 @@ def _cell(value) -> str:
     return f'<table:table-cell office:value-type="string"><text:p>{escape(str(value))}</text:p></table:table-cell>'
 
 
+def _row(row: list) -> str:
+    """Cells of one row; runs of empty cells use number-columns-repeated, like LibreOffice."""
+    out, blanks = [], 0
+    for v in row:
+        if v is None or v == "":
+            blanks += 1
+            continue
+        if blanks:
+            out.append(f'<table:table-cell table:number-columns-repeated="{blanks}"/>')
+            blanks = 0
+        out.append(_cell(v))
+    out.append('<table:table-cell table:number-columns-repeated="1024"/>')  # LibreOffice-style padding
+    return "".join(out)
+
+
 def write_ods(path: Path, sheets: dict[str, list[list]]) -> Path:
+    """Runs of empty rows are written as one row with number-rows-repeated, as LibreOffice does."""
     tables = []
     for name, rows in sheets.items():
-        body = "".join("<table:table-row>" + "".join(_cell(v) for v in row) + "</table:table-row>" for row in rows)
+        parts, blank_rows = [], 0
+        for row in rows:
+            if not any(v not in (None, "") for v in row):
+                blank_rows += 1
+                continue
+            if blank_rows:
+                parts.append(f'<table:table-row table:number-rows-repeated="{blank_rows}"><table:table-cell/></table:table-row>')
+                blank_rows = 0
+            parts.append("<table:table-row>" + _row(row) + "</table:table-row>")
+        parts.append('<table:table-row table:number-rows-repeated="1048000"><table:table-cell/></table:table-row>')
+        body = "".join(parts)
         tables.append(f'<table:table table:name="{escape(name)}">{body}</table:table>')
     xml = (f'<?xml version="1.0" encoding="UTF-8"?><office:document-content {NS} office:version="1.2">'
            f"<office:body><office:spreadsheet>{''.join(tables)}</office:spreadsheet></office:body>"

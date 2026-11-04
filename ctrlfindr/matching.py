@@ -22,7 +22,9 @@ import numpy as np
 
 Span = tuple[int, int]
 _WORDCHARS = re.compile(r"\w*")
-_WORD_TOKEN = re.compile(r"\S*\w\S*")  # whitespace-separated token with a letter or digit
+_TOKEN = re.compile(r"\S+")
+_HAS_WORDCHAR = re.compile(r"\w")
+Tokens = tuple[list[int], list[int]]  # start and end offsets of the words of a sentence
 
 
 def _isw(ch: str) -> bool:
@@ -120,18 +122,29 @@ def words_between(starts: list[int], ends: list[int], left_end: int, right_start
     return max(0, last - first)
 
 
-def co_occurs(sentence: str, spans1: list[Span], spans2: list[Span], distance: int) -> bool:
+def word_tokens(sentence: str) -> Tokens:
+    """Offsets of the whitespace-separated tokens that contain a letter or digit."""
+    starts: list[int] = []
+    ends: list[int] = []
+    for m in _TOKEN.finditer(sentence):
+        if _HAS_WORDCHAR.search(m.group()):
+            starts.append(m.start())
+            ends.append(m.end())
+    return starts, ends
+
+
+def co_occurs(
+    sentence: str, spans1: list[Span], spans2: list[Span], distance: int, tokens: Tokens | None = None
+) -> bool:
     """True if a match of list 1 and a match of list 2 are at most ``distance`` words apart.
 
     The distance is the number of words strictly between the end of the earlier match and
     the start of the later one (adjacent matches have distance 0). Order does not matter.
     Overlapping matches (for example the same word matched by both lists) never count.
     Words are whitespace-separated tokens that contain a letter or digit, so standalone
-    punctuation such as "-" is not counted.
+    punctuation such as "-" is not counted. ``tokens`` may pass precomputed word_tokens().
     """
-    tokens = [m.span() for m in _WORD_TOKEN.finditer(sentence)]
-    starts = [t[0] for t in tokens]
-    ends = [t[1] for t in tokens]
+    starts, ends = tokens if tokens is not None else word_tokens(sentence)
     for left, right in ((spans1, spans2), (spans2, spans1)):
         right_starts = [s[0] for s in right]
         for _, l_end in left:
@@ -146,10 +159,18 @@ def co_occurrence_column(
     spans1: list[list[Span] | None],
     spans2: list[list[Span] | None],
     distance: int,
+    token_cache: dict[int, Tokens] | None = None,
 ) -> np.ndarray:
-    """Evaluate one co-occurrence rule; only sentences where both lists matched are checked."""
+    """Evaluate one co-occurrence rule; only sentences where both lists matched are checked.
+
+    Pass the same ``token_cache`` dict to every rule so each sentence is tokenized once.
+    """
+    cache = {} if token_cache is None else token_cache
     out = np.zeros(len(sentences), dtype=bool)
     for i, (a, b) in enumerate(zip(spans1, spans2)):
         if a and b:
-            out[i] = co_occurs(sentences[i], a, b, distance)
+            tokens = cache.get(i)
+            if tokens is None:
+                tokens = cache[i] = word_tokens(sentences[i])
+            out[i] = co_occurs(sentences[i], a, b, distance, tokens)
     return out

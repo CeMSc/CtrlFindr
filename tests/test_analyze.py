@@ -85,3 +85,16 @@ def test_run_keeps_source_tables_and_writes_lf(tmp_path, small_fw):
     raw = (cfg.paths.output / "results_document.tsv").read_bytes()
     assert b"\r\n" not in raw
     assert (cfg.paths.output / "run_metadata.json").is_file()
+
+
+def test_outputs_of_earlier_runs_are_removed(tmp_path, small_fw):
+    (tmp_path / "Text_files").mkdir()
+    (tmp_path / "Text_files" / "d1.txt").write_text("Flood risk rises.", encoding="utf-8")
+    cfg = config_from_dict({"paths": {"framework": str(small_fw.path)}}, base=tmp_path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    assert (cfg.paths.output / "results_document_sentiment.tsv").is_file()
+    cfg.export.sentence_level = False
+    analyze.run(cfg, show_progress=False)
+    assert not (cfg.paths.output / "results_sentences.tsv").exists()
+    assert (cfg.paths.output / "results_document.tsv").is_file()

@@ -69,7 +69,7 @@ folders.
 
 The framework is an OpenDocument spreadsheet (`.ods`, made with LibreOffice; Excel can
 save in this format) with five sheets. Keep the column headers of the template.
-Everything is case-insensitive. Cells are read as displayed, so `1.10` stays `1.10`.
+Everything is case-insensitive. Cells are read as displayed, so `1.10` stays `1.10`; a decimal comma (`1,1`, as shown in some locales) is read as a dot.
 
 ### taxonomy
 

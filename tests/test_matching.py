@@ -1,9 +1,9 @@
 import re
+import time
 
-import numpy as np
 import pytest
 
-from ctrlfindr.matching import Matcher, co_occurs, term_regex
+from ctrlfindr.matching import Matcher, co_occurrence_column, co_occurs, term_regex, word_tokens
 
 
 def lists_found(taxonomy, sentence):
@@ -93,7 +93,6 @@ def test_nearest_pair_is_used():
 
 
 def test_long_segment_is_fast():
-    import time
     s = " ".join(["increase the risk of conflict and reduce capacity"] * 600)  # ~4,800 words
     m = Matcher({"i": ["increas*", "rise"], "c": ["capacit*", "resilien*"]})
     t = time.perf_counter()
@@ -101,3 +100,22 @@ def test_long_segment_is_fast():
     for k in range(5):
         co_occurs(s, keep["i"][k], keep["c"][k], 0)
     assert time.perf_counter() - t < 5  # v2.1 needed tens of seconds for this
+
+
+def test_word_tokens_skip_punctuation_and_are_linear():
+    s = "increase - the, (capacity) " + "=" * 200_000 + " end"
+    t = time.perf_counter()
+    starts, ends = word_tokens(s)
+    assert time.perf_counter() - t < 1  # the earlier regex took minutes on such runs
+    assert [s[a:b] for a, b in zip(starts, ends)] == ["increase", "the,", "(capacity)", "end"]
+
+
+def test_token_cache_is_shared_between_rules():
+    sents = ["increase the capacity", "nothing"]
+    m = Matcher({"i": ["increase"], "c": ["capacity"]})
+    _, keep = m.match(sents, {"i", "c"})
+    cache: dict = {}
+    a = co_occurrence_column(sents, keep["i"], keep["c"], 1, cache)
+    b = co_occurrence_column(sents, keep["c"], keep["i"], 0, cache)
+    assert a.tolist() == [True, False] and b.tolist() == [False, False]
+    assert list(cache) == [0]  # tokenized once, only the sentence where both lists matched

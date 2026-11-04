@@ -32,7 +32,6 @@ def test_valid_framework(tmp_path):
     assert fw.co_occurrences[0].distance == 5
     assert [v.column for v in fw.variables] == ["1. fast onset", "1.10 chained", "1.1 other"]  # 1.10 stays 1.10
     assert fw.query_order.index("a1") < fw.query_order.index("a2")
-    assert fw.uses_sentiment
 
 
 def test_example_framework_loads(example_framework_path):
@@ -99,3 +98,24 @@ def test_missing_sheet_and_file(tmp_path):
 def test_curly_quotes_in_queries_are_accepted(tmp_path):
     fw = load_framework(build(tmp_path, queries=[("a1", "“fast” AND NOT(“slow”)"), ("a2", '"a1"'), ("s", '"slow"')]))
     assert fw.queries[0].name == "a1"
+
+
+def test_comma_decimal_locale(tmp_path):
+    """LibreOffice in e.g. an Italian locale displays the number 1.1 as "1,1"."""
+    fw = load_framework(build(
+        tmp_path,
+        co=[("co_x", "fast", (5, "5,0"), "slow")],
+        variables=[("fast onset", (1, "1"), '"a1"'), ("other", (1.1, "1,1"), '"a1"'), ("chained", "1,10", '"a2", "s"')],
+    ))
+    assert fw.co_occurrences[0].distance == 5
+    assert [v.column for v in fw.variables] == ["1. fast onset", "1.1 other", "1.10 chained"]
+
+
+def test_reported_row_number_after_gap(tmp_path):
+    sheets = framework_sheets(**OK)
+    sheets["search_strings"][2:2] = [[], [], [], []]
+    sheets["search_strings"][-1] = ["", "s", '"slow" and']
+    path = write_ods(tmp_path / "gap.ods", sheets)
+    with pytest.raises(ValidationError) as exc:
+        load_framework(path)
+    assert "sheet 'search_strings', row 8:" in str(exc.value)

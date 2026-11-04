@@ -6,7 +6,7 @@ All problems are collected and reported together, with the sheet and row they co
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import query as q
@@ -80,7 +80,6 @@ class Framework:
     queries: list[Query]
     query_order: list[str]
     variables: list[Variable]
-    uses_sentiment: bool = field(default=False)
 
 
 def clean_cell(value: str) -> str:
@@ -201,7 +200,8 @@ def load_framework(path: str | Path, sentiment_enabled: bool = True) -> Framewor
             if rec[col] not in taxonomy:
                 problems.append(f"{where}: {col} {rec[col]!r} is not a list in the taxonomy sheet")
         try:
-            dist_f = float(rec["distance between lists"])
+            # Cells are read as displayed; comma-decimal locales show 5.0 as "5,0".
+            dist_f = float(rec["distance between lists"].replace(",", "."))
             if dist_f != int(dist_f) or dist_f < 0:
                 raise ValueError
             distance = int(dist_f)
@@ -232,7 +232,6 @@ def load_framework(path: str | Path, sentiment_enabled: bool = True) -> Framewor
     query_names = [name for _, name, _, _ in parsed]
     base_terms = set(taxonomy) | {c.name for c in co_occurrences} | {d.name for d in doc_conditionals}
     deps: dict[str, set[str]] = {}
-    uses_sentiment = False
     for i, name, _, ast in parsed:
         if ast is None:
             deps.setdefault(name, set())
@@ -240,7 +239,6 @@ def load_framework(path: str | Path, sentiment_enabled: bool = True) -> Framewor
         used = q.terms(ast)
         for t in sorted(used):
             if t in SENTIMENT_TERMS:
-                uses_sentiment = True
                 if not sentiment_enabled:
                     problems.append(
                         f"sheet 'search_strings', row {i}: query {name!r} uses {t!r} but sentiment "
@@ -260,7 +258,8 @@ def load_framework(path: str | Path, sentiment_enabled: bool = True) -> Framewor
     numbers: dict[str, int] = {}
     for i, rec in v_rows:
         where = f"sheet 'variables', row {i}"
-        number = rec["variable number"]
+        # Comma-decimal locales display a numeric 1.1 as "1,1"; variable numbers use dots.
+        number = rec["variable number"].replace(",", ".")
         if not _VAR_NUMBER.fullmatch(number):
             problems.append(f"{where}: variable number {number!r} must look like 1, 1.1 or 1.1.1")
         key = number.rstrip(".")
@@ -298,5 +297,4 @@ def load_framework(path: str | Path, sentiment_enabled: bool = True) -> Framewor
         queries=queries,
         query_order=order,
         variables=variables,
-        uses_sentiment=uses_sentiment,
     )

@@ -26,6 +26,12 @@ def test_clean_document_rules():
     assert "securityclimate" not in ingest.clean_document("Climate security\nClimate change")
 
 
+def test_config_rejects_fractional_whole_numbers(tmp_path):
+    with pytest.raises(ValidationError, match="must be a whole number"):
+        config_from_dict({"ingest": {"long_segment_words": 499.9}}, base=tmp_path)
+    assert config_from_dict({"ingest": {"long_segment_words": 400.0}}, base=tmp_path).ingest.long_segment_words == 400
+
+
 def test_crlf_and_bom(tmp_path):
     cfg = project(tmp_path, {"a.txt": "﻿First line.\r\nSecond line.\r\n\r\nNew paragraph.".encode("utf-8")})
     ingest.run(cfg, show_progress=False)

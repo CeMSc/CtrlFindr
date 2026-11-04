@@ -90,8 +90,9 @@ def analyze_sentences(
     hits, spans = matcher.match(text, span_lists, _progress("matching") if show_progress else None)
     cols.update(hits)
 
+    token_cache: dict = {}
     for co in fw.co_occurrences:
-        cols[co.name] = co_occurrence_column(text, spans[co.first], spans[co.second], co.distance)
+        cols[co.name] = co_occurrence_column(text, spans[co.first], spans[co.second], co.distance, token_cache)
 
     doc_codes = pd.factorize(sentences["document"])[0]
     for dc in fw.doc_conditionals:
@@ -221,6 +222,15 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, pd.DataFrame]:
         outputs["results_sentences"] = results
     for name, df in outputs.items():
         write_tsv(df, out_dir / f"{name}.tsv")
+    # Remove result files of an earlier run that this run did not produce (an export or
+    # sentiment was switched off), so the folder never mixes results of different runs.
+    stale = [out_dir / f"{name}.tsv" for name in OUTPUT_FILES if name not in outputs]
+    stale = [p for p in stale if p.is_file()]
+    for p in stale:
+        p.unlink()
+    if stale:
+        log.info("Removed %s from an earlier run (not produced with the current settings)",
+                 ", ".join(p.name for p in stale))
     with connect(db) as conn:
         write_table(conn, results, RESULTS)
 

@@ -16,8 +16,9 @@ _TEXT = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
 _T = f"{{{_TABLE}}}"
 _X = f"{{{_TEXT}}}"
 
-# Spreadsheets pad sheets with huge "repeated" blank rows/columns; never expand those.
-_MAX_REPEAT_BLANK = 1
+# Spreadsheets pad sheets with huge "repeated" blank rows/columns at the end. Blank runs
+# are therefore expanded only when content follows them, so that row and column numbers
+# stay exact while trailing padding costs nothing.
 
 
 def _paragraph_text(p: ET.Element) -> str:
@@ -57,23 +58,27 @@ def read_ods(path: str | Path) -> dict[str, list[list[str]]]:
     sheets: dict[str, list[list[str]]] = {}
     for table in root.iter(f"{_T}table"):
         rows: list[list[str]] = []
+        blank_rows = 0
         for row in table.iter(f"{_T}table-row"):
             cells: list[str] = []
+            blank_cells = 0
             for cell in row:
                 if cell.tag not in (f"{_T}table-cell", f"{_T}covered-table-cell"):
                     continue
                 text = _cell_text(cell)
                 repeat = int(cell.get(f"{_T}number-columns-repeated", "1"))
-                if not text:
-                    repeat = min(repeat, _MAX_REPEAT_BLANK) if repeat > 1000 else repeat
+                if not text.strip():
+                    blank_cells += repeat
+                    continue
+                cells.extend([""] * blank_cells)
+                blank_cells = 0
                 cells.extend([text] * repeat)
-            while cells and not cells[-1].strip():
-                cells.pop()
             repeat_rows = int(row.get(f"{_T}number-rows-repeated", "1"))
             if not cells:
-                repeat_rows = min(repeat_rows, _MAX_REPEAT_BLANK)
-            rows.extend([list(cells) for _ in range(repeat_rows)])
-        while rows and not rows[-1]:
-            rows.pop()
+                blank_rows += repeat_rows
+                continue
+            rows.extend([] for _ in range(blank_rows))
+            blank_rows = 0
+            rows.extend(list(cells) for _ in range(repeat_rows))
         sheets[table.get(f"{_T}name", "")] = rows
     return sheets

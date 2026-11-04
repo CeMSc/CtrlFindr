@@ -17,7 +17,7 @@ from importlib import metadata
 from pathlib import Path
 
 from . import __version__
-from .common import DOCUMENTS, META, SENTENCES, CtrlFindrError, ValidationError, connect, normalize_text
+from .common import DOCUMENTS, META, SENTENCES, CtrlFindrError, ValidationError, connect, normalize_text, sha256_file
 from .config import Config
 
 log = logging.getLogger("ctrlfindr")
@@ -172,41 +172,46 @@ def _prepare_db(conn: sqlite3.Connection, signature: str) -> dict[str, str]:
 
 
 def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
-    """Ingest the text files folder into the database. Returns counts of what was done."""
-    files = discover(cfg.paths.text_files)
-    raw: dict[str, tuple[SourceFile, bytes, str]] = {}
-    for f in files:
-        data = f.path.read_bytes()
-        raw[f.document] = (f, data, hashlib.sha256(data).hexdigest())
+    """Ingest the text files folder into the database. Returns counts of what was done.
 
+    Files are hashed by streaming them; only new or changed files are read into memory,
+    one at a time, so memory use does not grow with the size of the corpus.
+    """
+    files = {f.document: f for f in discover(cfg.paths.text_files)}
+    digests = {d: sha256_file(f.path) for d, f in files.items()}
     errors = cfg.ingest.encoding_errors
-    bad = []
-    for doc, (f, data, _) in raw.items():
-        try:
-            decode(data, "strict")
-        except UnicodeDecodeError as exc:
-            bad.append(f"{f.path.name}: not valid UTF-8 (byte {exc.start})")
-    if bad and errors == "strict":
-        raise ValidationError(
-            "Some text files are not UTF-8. Re-save them as UTF-8, or set "
-            '[ingest] encoding_errors = "replace" to substitute unreadable characters',
-            bad,
-        )
-    if bad:
-        log.warning("%d file(s) are not valid UTF-8; unreadable bytes were replaced: %s",
-                    len(bad), "; ".join(bad[:5]) + (" ..." if len(bad) > 5 else ""))
 
     db = cfg.paths.database
     with connect(db) as conn:
         kept = _prepare_db(conn, _signature(cfg))
-        removed = [d for d in kept if d not in raw]
-        todo = [d for d, (_, _, h) in raw.items() if kept.get(d) != h]
+        removed = [d for d in kept if d not in files]
+        todo = [d for d in files if kept.get(d) != digests[d]]
+
+        # Check encodings before anything is changed. Unchanged files were checked when
+        # they were ingested (the encoding setting is part of the stored signature).
+        bad = []
+        for d in todo:
+            try:
+                decode(files[d].path.read_bytes(), "strict")
+            except UnicodeDecodeError as exc:
+                bad.append(f"{files[d].path.name}: not valid UTF-8 (byte {exc.start})")
+        if bad and errors == "strict":
+            raise ValidationError(
+                "Some text files are not UTF-8. Re-save them as UTF-8, or set "
+                '[ingest] encoding_errors = "replace" to substitute unreadable characters',
+                bad,
+            )
+        if bad:
+            log.warning("%d file(s) are not valid UTF-8; unreadable bytes were replaced: %s",
+                        len(bad), "; ".join(bad[:5]) + (" ..." if len(bad) > 5 else ""))
+
         for d in removed + todo:
             conn.execute(f"DELETE FROM {SENTENCES} WHERE document=?", (d,))
             conn.execute(f"DELETE FROM {DOCUMENTS} WHERE document=?", (d,))
-        for d, (f, _, _) in raw.items():  # files may have moved; keep paths current
+        for d, f in files.items():  # files may have moved; keep paths current
             conn.execute(f"UPDATE {DOCUMENTS} SET path=? WHERE document=?", (str(f.path), d))
 
+        n_sent = 0
         if todo:
             from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
@@ -218,10 +223,12 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
 
                 iterator = tqdm(todo, desc="ingest", unit=" files", leave=False)
             empty = []
-            n_sent = 0
             for d in iterator:
-                f, data, digest = raw[d]
+                f = files[d]
+                data = f.path.read_bytes()
+                digest = hashlib.sha256(data).hexdigest()  # the bytes actually ingested
                 text = clean_document(decode(data, errors), cfg.ingest.text_cleaning)
+                del data
                 sents = segmenter.split(text)
                 if not sents:
                     empty.append(f.path.name)
@@ -238,11 +245,9 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
             if empty:
                 log.warning("%d file(s) contain no sentences and will not appear in the results: %s",
                             len(empty), ", ".join(empty))
-        else:
-            n_sent = 0
         total = conn.execute(f"SELECT COUNT(*) FROM {SENTENCES}").fetchone()[0]
 
-    summary = {"files": len(raw), "processed": len(todo), "unchanged": len(raw) - len(todo),
+    summary = {"files": len(files), "processed": len(todo), "unchanged": len(files) - len(todo),
                "removed": len(removed), "new_sentences": n_sent, "sentences": total}
     log.info("Ingest: %(files)d files (%(processed)d processed, %(unchanged)d unchanged, "
              "%(removed)d removed); %(sentences)d sentences in the database", summary)
