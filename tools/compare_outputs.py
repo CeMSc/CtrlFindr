@@ -2,7 +2,7 @@
 
     python tools/compare_outputs.py OLD_OUTPUT_DIR NEW_OUTPUT_DIR [--rename old=new ...]
 
-Document-level tables are compared cell by cell (numbers with a small tolerance).
+Column names are compared case-insensitively. Document-level tables are compared cell by cell (numbers with a small tolerance).
 Sentence-level tables usually have different rows when sentence splitting changed, so
 they are compared through per-document sentence counts and per-column totals.
 """
@@ -24,7 +24,8 @@ DOC_TABLES = (
 
 
 def read(path: Path) -> pd.DataFrame | None:
-    return pd.read_csv(path, sep="\t") if path.is_file() else None
+    """Read a TSV; column names are lowercased, since 2.1 lowercased variable names."""
+    return pd.read_csv(path, sep="\t").rename(columns=str.lower) if path.is_file() else None
 
 
 def _equal(a: pd.Series, b: pd.Series) -> np.ndarray:

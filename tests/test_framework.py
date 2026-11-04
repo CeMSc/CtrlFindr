@@ -2,120 +2,146 @@ import pytest
 
 from ctrlfindr.common import ValidationError
 from ctrlfindr.framework import load_framework
-from odsutil import framework_sheets, write_ods
+from fwutil import make_framework
 
-TAX = {"fast": ["flood*", "storm"], "slow": ["drought*"], "hwc": ["human–wildlife"]}
-OK = dict(
-    taxonomy=TAX,
-    co=[("co_x", "fast", (5, "5"), "slow")],
-    dc=[("doc_hwc", "hwc")],
-    queries=[("a1", '"fast" AND NOT("slow")'), ("a2", '"a1" or "co_x"'), ("s", '"slow" and "sentiment_negative"')],
-    variables=[("fast onset", "1", '"a1"'), ("chained", "1.10", '"a2", "s"'), ("other", ("1.1", "1.1"), '"a1"')],
-)
+TAX = [("fast", "flood*"), ("fast", "storm"), ("slow", "drought*"), ("hwc", "human~wildlife"),
+       ("idioms", "business climate"), ("clim", "climat*"), ("clim", "-@idioms"), ("clim", "-climate of fear")]
+QUERIES = [("a1", "fast AND NOT slow"), ("co_x", "NEAR(fast, slow, 5)"), ("a2", '"a1" OR co_x'),
+           ("s", "slow AND sentiment_negative"), ("haz", "fast OR slow")]
+VARIABLES = [("1", "Fast onset", "a1"), ("1.10", "Chained", "a2 OR s"), ("1,1", "Other", "V(1.10)")]
 
 
-def build(tmp_path, **overrides):
-    args = {**OK, **overrides}
-    return write_ods(tmp_path / "fw.ods", framework_sheets(**args))
+def build(tmp_path, ext="ods", **kw):
+    args = dict(taxonomy=TAX, queries=QUERIES, variables=VARIABLES)
+    args.update(kw)
+    return make_framework(tmp_path / f"fw.{ext}", **args)
 
 
-def problems(tmp_path, sentiment=True, **overrides):
+def problems(tmp_path, **kw):
     with pytest.raises(ValidationError) as exc:
-        load_framework(build(tmp_path, **overrides), sentiment_enabled=sentiment)
+        load_framework(build(tmp_path, **kw))
     return "\n".join(exc.value.problems)
 
 
-def test_valid_framework(tmp_path):
-    fw = load_framework(build(tmp_path))
-    assert list(fw.taxonomy) == ["fast", "slow", "hwc"]
-    assert fw.taxonomy["hwc"] == ["human-wildlife"]  # en dash folded, as in the corpus
-    assert fw.co_occurrences[0].distance == 5
-    assert [v.column for v in fw.variables] == ["1. fast onset", "1.10 chained", "1.1 other"]  # 1.10 stays 1.10
+@pytest.mark.parametrize("ext", ["ods", "xlsx"])
+def test_valid_framework(tmp_path, ext):
+    fw = load_framework(build(tmp_path, ext, meta={"title": "T", "my_key": "kept"}))
+    assert list(fw.lists) == ["fast", "slow", "hwc", "idioms", "clim"]
+    assert fw.lists["clim"].exclude_lists == ["idioms"] and fw.lists["clim"].exclude_terms == ["climate of fear"]
     assert fw.query_order.index("a1") < fw.query_order.index("a2")
+    assert [v.column for v in fw.variables] == ["1. Fast onset", "1.10 Chained", "1.1 Other"]  # names keep case
+    assert fw.variable("1.1").parent == "1" and fw.variable("1.10").parent == "1"
+    assert fw.variable_order.index("1.10") < fw.variable_order.index("1.1")  # V(1.10) evaluated first
+    assert fw.meta == {"format_version": "1", "title": "T", "my_key": "kept"}
 
 
-def test_example_framework_loads(example_framework_path):
-    fw = load_framework(example_framework_path)
-    assert len(fw.taxonomy) == 15 and len(fw.variables) == 11
-    assert [d.name for d in fw.doc_conditionals] == ["doc_ipcc"]
+def test_format_version_is_required_and_checked(tmp_path):
+    assert "format_version' is missing" in problems(tmp_path, meta={"format_version": ""})
+    assert "reads framework format 1" in problems(tmp_path, meta={"format_version": "2"})
+    path = make_framework(tmp_path / "x.ods", TAX, QUERIES, VARIABLES, drop_sheets=("meta",))
+    with pytest.raises(ValidationError, match="not a CtrlFindr framework"):
+        load_framework(path)
 
 
-def test_all_problems_are_reported_together(tmp_path):
-    text = problems(
-        tmp_path,
-        taxonomy={"fast": ["flood"], "empty": [], "slow": ["*"]},
-        co=[("", "fast", "5", "slow"), ("co_bad", "fast", "x", "nolist")],
-        queries=[("a1", '"fast" and "missing"'), ("a2", '"fast" and')],
-        variables=[("v", "1", '"a1" OR "a2"')],
-    )
-    for expected in [
-        "list 'empty' has no terms",
-        "term '*' has no letters",
-        "empty cell(s) in 'name of co-occurrence'",
-        "distance 'x' must be a whole number",
-        "second list 'nolist' is not a list",
-        "refers to 'missing'",
-        "query 'a2': query ends",
-        "must be query names in double quotes separated by commas",
-    ]:
-        assert expected in text, expected
+def test_language(tmp_path):
+    assert "not supported" in problems(tmp_path, meta={"language": "it"})
 
 
-def test_names_must_be_unique_across_sheets(tmp_path):
-    text = problems(tmp_path, queries=[("fast", '"slow"'), ("a1", '"fast"'), ("a2", '"a1"'), ("s", '"slow"')])
-    assert "name 'fast' is already used in sheet 'taxonomy'" in text
+def test_settings(tmp_path):
+    fw = load_framework(build(tmp_path, settings={"aggregate_children": "yes", "sentiment_positive_threshold": "0,1"}))
+    assert fw.settings.aggregate_children and fw.settings.sentiment_positive_threshold == 0.1
+    text = problems(tmp_path, settings={"sentiment": "maybe", "colour": "red", "sentiment_negative_threshold": "0.5"})
+    assert "sentiment must be true or false" in text and "unknown setting 'colour'" in text and "thresholds must satisfy" in text
 
 
-def test_reserved_names(tmp_path):
-    text = problems(tmp_path, taxonomy={**TAX, "sentiment_positive": ["good"]})
-    assert "'sentiment_positive' is reserved" in text
+def test_sentiment_flags_need_sentiment(tmp_path):
+    assert "needs sentiment" in problems(tmp_path, settings={"sentiment": False})
 
 
-def test_duplicate_variable_numbers(tmp_path):
-    text = problems(tmp_path, variables=[("x", "1", '"a1"'), ("y", "1.", '"a1"')])
-    assert "variable number '1.' is already used" in text
+def test_name_rules(tmp_path):
+    text = problems(tmp_path, taxonomy=TAX + [("fast onset", "x"), ("near", "y"), ("2x", "z"), ("sentiment_positive", "w")])
+    assert "'fast onset' must start with a letter" in text and "'fast_onset'" in text
+    assert "'near' is a reserved word" in text
+    assert "'2x' must start with a letter" in text and "'x_2x'" in text
+    assert "'sentiment_positive' is reserved by CtrlFindr" in text
+
+
+def test_names_unique_across_lists_and_queries(tmp_path):
+    assert "name 'fast' is already used in sheet 'taxonomy'" in problems(tmp_path, queries=QUERIES + [("fast", "slow")])
+
+
+def test_taxonomy_problems(tmp_path):
+    text = problems(tmp_path, taxonomy=TAX + [("bad", "~x"), ("bad2", "_ risk"), ("only_excl", "-foo"),
+                                              ("x", "-@missing"), ("self", "a"), ("self", "-@self")])
+    assert "'~' must join two parts" in text
+    assert "word gap '_' needs words on both sides" in text
+    assert "list 'only_excl'" in text and "only exclusions" in text
+    assert "'-@missing' refers to a list that does not exist" in text
+    assert "cannot exclude itself" in text
+
+
+def test_exclusion_loop(tmp_path):
+    text = problems(tmp_path, taxonomy=TAX + [("p", "a"), ("p", "-@q"), ("q", "b"), ("q", "-@p")])
+    assert "exclude each other in a loop" in text
+
+
+def test_query_problems(tmp_path):
+    text = problems(tmp_path, queries=QUERIES + [
+        ("q1", "fast AND missing"), ("q2", "NEAR(a1 AND slow, fast, 3)"), ("q3", "fast AND"),
+        ("q4", "V(1)"), ("q5", "{-foo} OR fast"), ("q6", "COUNT(s) >= 2"),
+    ])
+    assert "'missing' is not a list, query or sentiment flag" in text
+    assert "NEAR needs word positions" in text
+    assert "query 'q3': the expression ends" in text
+    assert "V(1) can only be used in the variables sheet" in text
+    assert "exclusions belong in the taxonomy sheet" in text
+    assert "COUNT needs word positions, but 's'" in text
+
+
+def test_query_defined_as_or_of_lists_is_a_set(tmp_path):
+    fw = load_framework(build(tmp_path, queries=QUERIES + [("q", "COUNT_DISTINCT(haz) >= 2"), ("n", "NEAR(haz, {rain}, 2)")]))
+    assert sorted(set(x for v in fw.set_lists.values() for x in v)) == ["fast", "slow", "{rain}"]
+    assert "{rain}" in fw.inline
 
 
 def test_query_cycles(tmp_path):
-    text = problems(tmp_path, queries=[("a1", '"a2"'), ("a2", '"a1"'), ("s", '"slow"')],
-                    variables=[("v", "1", '"a1"')])
-    assert "loop: a1 -> a2 -> a1" in text
+    assert "loop: p -> r -> p" in problems(tmp_path, queries=QUERIES + [("p", "r"), ("r", "p")])
 
 
-def test_sentiment_terms_need_sentiment_enabled(tmp_path):
-    assert "sentiment analysis is disabled" in problems(tmp_path, sentiment=False)
+def test_variable_problems(tmp_path):
+    text = problems(tmp_path, variables=[("1", "A", "a1"), ("1.", "Dup", "a1"), ("x.1", "Bad", "a1"), ("2", "Empty", ""),
+                                         ("3", "Loop", "V(4)"), ("4", "Loop2", "V(3)"), ("5", "Ref", "V(9)"),
+                                         ("6", "Parent", "a1", "8")])
+    assert "number '1' is already used" in text
+    assert "number 'x.1' must look like" in text
+    assert "variable 2 has no definition" in text
+    assert "variables refer to each other in a loop" in text
+    assert "V(9) refers to a variable number that does not exist" in text
+    assert "parent '8' is not a variable number" in text
 
 
-def test_missing_sheet_and_file(tmp_path):
-    sheets = framework_sheets(**OK)
-    del sheets["taxonomy"]
-    with pytest.raises(ValidationError, match="invalid"):
-        load_framework(write_ods(tmp_path / "x.ods", sheets))
-    with pytest.raises(ValidationError, match="not found"):
-        load_framework(tmp_path / "nope.ods")
+def test_aggregate_children_allows_empty_parent(tmp_path):
+    fw = load_framework(build(tmp_path, settings={"aggregate_children": True},
+                              variables=[("1", "Parent", ""), ("1.1", "A", "a1"), ("1.2", "B", "s")]))
+    assert fw.variable("1").children == ["1.1", "1.2"]
+    assert fw.variable_order.index("1") > fw.variable_order.index("1.2")
 
 
-def test_curly_quotes_in_queries_are_accepted(tmp_path):
-    fw = load_framework(build(tmp_path, queries=[("a1", "“fast” AND NOT(“slow”)"), ("a2", '"a1"'), ("s", '"slow"')]))
-    assert fw.queries[0].name == "a1"
+def test_explicit_parent_overrides_numbering(tmp_path):
+    fw = load_framework(build(tmp_path, variables=[("1", "A", "a1"), ("2", "B", "s"), ("2.1", "C", "a2", "1")]))
+    assert fw.variable("2.1").parent == "1" and fw.variable("1").children == ["2.1"]
 
 
-def test_comma_decimal_locale(tmp_path):
-    """LibreOffice in e.g. an Italian locale displays the number 1.1 as "1,1"."""
-    fw = load_framework(build(
-        tmp_path,
-        co=[("co_x", "fast", (5, "5,0"), "slow")],
-        variables=[("fast onset", (1, "1"), '"a1"'), ("other", (1.1, "1,1"), '"a1"'), ("chained", "1,10", '"a2", "s"')],
-    ))
-    assert fw.co_occurrences[0].distance == 5
-    assert [v.column for v in fw.variables] == ["1. fast onset", "1.1 other", "1.10 chained"]
+def test_tests_sheet_parsing(tmp_path):
+    fw = load_framework(build(tmp_path, tests=[("Floods came.", "fast, a1, 1", "slow", "g1", "2")]))
+    t = fw.tests[0]
+    assert (t.expect_true, t.expect_false, t.group, t.paragraph) == (("fast", "a1", "1"), ("slow",), "g1", 2)
+    text = problems(tmp_path, tests=[("Floods.", "fast, nothing", ""), ("No expectations.", "", ""),
+                                     ("Context only.", "", "", "g1")])
+    assert "names 'nothing'" in text and "row 3: the test has no expect_true" in text and "row 4" not in text
 
 
-def test_reported_row_number_after_gap(tmp_path):
-    sheets = framework_sheets(**OK)
-    sheets["search_strings"][2:2] = [[], [], [], []]
-    sheets["search_strings"][-1] = ["", "s", '"slow" and']
-    path = write_ods(tmp_path / "gap.ods", sheets)
-    with pytest.raises(ValidationError) as exc:
-        load_framework(path)
-    assert "sheet 'search_strings', row 8:" in str(exc.value)
+def test_all_problems_reported_together(tmp_path):
+    text = problems(tmp_path, taxonomy=TAX + [("bad", "~x")], queries=QUERIES + [("q", "nope")],
+                    variables=VARIABLES + [("9", "X", "")])
+    assert text.count("\n") >= 2

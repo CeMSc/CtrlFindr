@@ -1,54 +1,65 @@
-import numpy as np
 import pytest
 
 from ctrlfindr import query as q
 
-T, F = True, False
-COLS = {"a": np.array([T, T, F, F]), "b": np.array([T, F, T, F]), "c": np.array([F, F, F, T]),
-        "command-and-control": np.array([T, F, F, F])}
+
+@pytest.mark.parametrize("text,canonical", [
+    ('fast AND NOT (slow OR co_slow)', "fast AND NOT (slow OR co_slow)"),
+    ('"fast" and not("slow")', "fast AND NOT slow"),                     # quotes optional, case-insensitive
+    ('(("a")AND("b"))OR"c"', "(a AND b) OR c"),
+    ('NEAR(fast OR {storm*}, hwc, 5)', "NEAR(fast OR {storm*}, hwc, 5)"),
+    ('doc(ipcc) >= 3 and doc_share(a1)>=0.05', "DOC(ipcc) >= 3 AND DOC_SHARE(a1) >= 0.05"),
+    ('doc(x)', "DOC(x)"), ('PARAGRAPH(x) > 2', "PARAGRAPH(x) > 2"), ('WINDOW(c, 2) AND d', "WINDOW(c, 2) AND d"),
+    ('count_distinct(h) >= 2', "COUNT_DISTINCT(h) >= 2"), ('V(2.1) or V(2.2)', "V(2.1) OR V(2.2)"),
+    ('not_near(a, b, 3)', "NOT_NEAR(a, b, 3)"), ('before(a, b, 0)', "BEFORE(a, b, 0)"),
+    ('"command-and-control"', "command-and-control"),                  # operator words inside names stay
+])
+def test_parse_and_canonical_text(text, canonical):
+    assert q.to_text(q.parse(text)) == canonical
 
 
-def ev(text):
-    return q.evaluate(q.parse(text), COLS).tolist()
+def test_precedence_not_and_or():
+    node = q.parse("a or b and not c")
+    assert isinstance(node, q.Or) and isinstance(node.operands[1], q.And)
+    assert isinstance(node.operands[1].operands[1], q.Not)
 
 
-def test_operators_case_insensitive_and_adjacent_parentheses():
-    assert ev('"a" AND NOT("b")') == ev('"a" and not ("b")') == [F, T, F, F]
-    assert ev('(("a")AND("b"))OR"c"') == [T, F, F, T]
+def test_function_name_without_parenthesis_is_a_name():
+    assert q.parse("near") == q.Name("near")
 
 
-@pytest.mark.parametrize("expr", ['"a" or "b" and "c"', 'not "a" and "b"', 'not "a" or "b" and not "c"', '"a" and "b" or "c"'])
-def test_precedence_matches_python(expr):
-    """v2.x evaluated queries with Python's eval; precedence must be identical."""
-    expected = []
-    for i in range(4):
-        env = {k: bool(v[i]) for k, v in COLS.items() if k in "abc"}
-        py = expr.replace('"', "")
-        expected.append(bool(eval(py, {}, env)))
-    assert ev(expr) == expected
-
-
-def test_operator_words_inside_terms_are_not_rewritten():
-    assert ev('"command-and-control"') == [T, F, F, F]
-
-
-def test_unknown_term_raises_instead_of_being_truthy():
-    with pytest.raises(KeyError):
-        ev('"sentiment_positive" and "a"')
+def test_bare_count_means_at_least_one():
+    c = q.parse("COUNT(x)")
+    assert (c.op, c.value) == (">=", 1.0)
+    assert (q.parse("DOC_SHARE(x)").op, q.parse("DOC_SHARE(x)").value) == (">", 0.0)
 
 
 @pytest.mark.parametrize("bad,msg", [
-    ('"a" and', "ends"), ('("a"', r"missing '\)'"), ('"a")', "unexpected"), ('a and "b"', "unexpected word"),
-    ('"a" "b"', "unexpected"), ('""', "empty term"), ('"a', "unclosed"), ("", "empty"), ('"a" & "b"', "unexpected character"),
+    ("NEAR(a, b)", "takes 3 arguments"), ("NEAR(a, b, 2.5)", "whole number"), ("WINDOW(a, 2) > 1", "cannot be compared"),
+    ("doc_share(a) > 2", "between 0 and 1"), ("fast AND", "ends where"), ("{storm", "unmatched '{'"),
+    ("a & b", "unexpected character"), ("V(x)", "variable number"), ("a b", "unexpected 'b'"), ('""', "empty name"),
+    ("{}", "empty term"), ('"a', "unclosed"), ("", "empty"), ("(a", r"missing '\)'"), ("COUNT(a) >=", "a number after"),
 ])
 def test_syntax_errors(bad, msg):
     with pytest.raises(q.QuerySyntaxError, match=msg):
         q.parse(bad)
 
 
-def test_terms_and_dependency_order():
-    assert q.terms(q.parse('("x" or not "y") and "z"')) == {"x", "y", "z"}
+def test_helpers():
+    node = q.parse("NEAR(a OR {x y}, b, 2) AND DOC(c) AND V(1.2)")
+    assert q.names(node) == {"a", "b", "c"}
+    assert q.inline_terms(node) == {"x y"}
+    assert q.variable_refs(node) == {"1.2"}
+    assert [(f, q.to_text(a)) for f, a in q.set_arguments(node)] == [("near", "a OR {x y}"), ("near", "b")]
+
+
+def test_name_rules():
+    assert q.check_name("co_slow") is None and q.check_name("doc-ipcc") is None
+    assert "reserved word" in q.check_name("window")
+    assert "'fast_onset'" in q.check_name("fast onset")
+
+
+def test_dependency_order():
     order, cycles = q.dependency_order({"q1": {"q2"}, "q2": set(), "q3": {"q1"}})
     assert order == ["q2", "q1", "q3"] and cycles == []
-    _, cycles = q.dependency_order({"q1": {"q2"}, "q2": {"q1"}})
-    assert cycles == [["q1", "q2", "q1"]]
+    assert q.dependency_order({"a": {"b"}, "b": {"a"}})[1] == [["a", "b", "a"]]

@@ -1,18 +1,32 @@
-"""Load the assessment framework (.ods) and validate it before any text is processed.
+"""Load and validate an assessment framework (.ods or .xlsx), format version 1.
 
-All problems are collected and reported together, with the sheet and row they come from.
+Sheets (names are case-insensitive; columns marked * are required):
+
+meta         key*, value                  format_version (required), title, version, author,
+                                          language, description, and any other key
+settings     key*, value*, note           coding settings (optional sheet; defaults below)
+taxonomy     list*, term*, note           one row per term; "-phrase" / "-@list" exclude
+queries      name*, query*, note          named expressions (see ctrlfindr.query)
+variables    number*, name*, definition, parent, note
+tests        sentence*, expect_true, expect_false, group, paragraph, note   (optional)
+instructions (ignored)
+
+Everything is checked before any text is processed and all problems are reported together,
+with sheet and row.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import query as q
 from .common import ValidationError, collapse_ws, normalize_text, sha256_file
-from .ods import read_ods
+from .matching import ListSpec, TermError, parse_term
+from .spreadsheet import SUFFIXES, read_workbook
 
+FORMAT_VERSION = "1"
 SENTIMENT_TERMS = (
     "sentiment_positive",
     "sentiment_neutral",
@@ -20,34 +34,31 @@ SENTIMENT_TERMS = (
     "sentiment_negative",
     "sentiment_neutralnegative",
 )
-# Column names the pipeline itself creates; framework names may not reuse them.
-RESERVED = {"document", "sentences", "sentence_id", "start", "end", "vader_compound", *SENTIMENT_TERMS}
+OUTPUT_COLUMNS = {"document", "sentences", "sentence_id", "paragraph", "start", "end", "vader_compound"}
+RESERVED = OUTPUT_COLUMNS | set(SENTIMENT_TERMS)
 
 SHEETS = {
-    "variables": ("variable", "variable number", "aggregation query"),
-    "search_strings": ("query name", "query"),
-    "co_occurrences": ("name of co-occurrence", "first list", "distance between lists", "second list"),
-    "doc_conditionals": ("name of document-level conditional", "list"),
-    "taxonomy": (),
+    "meta": (("key",), ("value",)),
+    "settings": (("key", "value"), ("note",)),
+    "taxonomy": (("list", "term"), ("note",)),
+    "queries": (("name", "query"), ("note",)),
+    "variables": (("number", "name"), ("definition", "parent", "note")),
+    "tests": (("sentence",), ("expect_true", "expect_false", "group", "paragraph", "note")),
 }
+REQUIRED_SHEETS = ("meta", "taxonomy", "queries", "variables")
 
-_VAR_NUMBER = re.compile(r"\d+(\.\d+)*\.?")
-_AGGREGATION = re.compile(r'"[^"]+"(\s*,\s*"[^"]+")*')
-_HAS_WORD = re.compile(r"\w")
-
-
-@dataclass(frozen=True)
-class CoOccurrence:
-    name: str
-    first: str
-    second: str
-    distance: int
+_VAR_NUMBER = re.compile(r"\d+(\.\d+)*")
 
 
-@dataclass(frozen=True)
-class DocConditional:
-    name: str
-    list: str
+@dataclass
+class Settings:
+    """Coding settings stored in the framework (sheet 'settings')."""
+
+    sentiment: bool = True
+    sentiment_positive_threshold: float = 0.05
+    sentiment_negative_threshold: float = -0.05
+    aggregate_children: bool = False
+    tests_must_pass: bool = True
 
 
 @dataclass(frozen=True)
@@ -55,246 +66,437 @@ class Query:
     name: str
     text: str
     ast: q.Node
+    note: str = ""
 
 
-@dataclass(frozen=True)
+@dataclass
 class Variable:
     number: str
     name: str
-    children: tuple[str, ...]
+    text: str
+    ast: q.Node | None
+    parent: str | None
+    note: str = ""
+    children: list[str] = field(default_factory=list)
 
     @property
     def column(self) -> str:
-        """Output column name, as in CtrlFindr 2.x: ``"1. name"``, ``"1.1 name"``."""
+        """Output column name: ``"1. name"``, ``"1.1 name"``."""
         num = self.number if "." in self.number else self.number + "."
         return f"{num} {self.name}"
+
+
+@dataclass(frozen=True)
+class TestCase:
+    row: int
+    group: str
+    paragraph: int
+    sentence: str
+    expect_true: tuple[str, ...]
+    expect_false: tuple[str, ...]
+    note: str = ""
 
 
 @dataclass
 class Framework:
     path: Path
     sha256: str
-    taxonomy: dict[str, list[str]]
-    co_occurrences: list[CoOccurrence]
-    doc_conditionals: list[DocConditional]
+    meta: dict[str, str]
+    settings: Settings
+    lists: dict[str, ListSpec]            # named lists, in sheet order
+    inline: dict[str, ListSpec]           # {term} used in expressions, keyed "{term}"
+    notes: dict[str, str]                 # notes of lists (first note of the list) and queries
+    term_notes: dict[tuple[str, str], str]
     queries: list[Query]
     query_order: list[str]
     variables: list[Variable]
+    variable_order: list[str]             # variable numbers in evaluation order
+    tests: list[TestCase]
+    set_lists: dict[int, tuple[str, ...]]  # id(set argument node) -> lists whose matches it uses
+
+    @property
+    def all_lists(self) -> dict[str, ListSpec]:
+        return {**self.lists, **self.inline}
+
+    def variable(self, number: str) -> Variable:
+        return next(v for v in self.variables if v.number == number)
 
 
 def clean_cell(value: str) -> str:
-    """Normalize a framework cell the way the corpus is normalized, then lowercase."""
-    return collapse_ws(normalize_text(value)).lower()
+    """Normalize a cell like the corpus text (NFKC, dash/quote folding, single spaces)."""
+    return collapse_ws(normalize_text(value))
 
 
-def _sheet_records(
-    name: str, rows: list[list[str]], required: tuple[str, ...], problems: list[str]
-) -> list[tuple[int, dict[str, str]]]:
-    """Rows of a tabular sheet as (spreadsheet row number, {column: value}).
+def _records(sheet: str, rows: list[list[str]], problems: list[str]) -> list[tuple[int, dict[str, str]]]:
+    """Rows of a sheet as (spreadsheet row number, {column: cleaned value}).
 
-    Fully blank rows are skipped; partly filled rows are reported.
+    Fully empty rows are skipped; rows missing a required value are reported.
     """
+    required, optional = SHEETS[sheet]
     if not rows:
-        problems.append(f"sheet '{name}': header row is missing (expected columns: {', '.join(required)})")
+        problems.append(f"sheet '{sheet}' has no header row (expected columns: {', '.join(required + optional)})")
         return []
-    header = [clean_cell(h) for h in rows[0]]
+    header = [clean_cell(h).lower() for h in rows[0]]
     missing = [c for c in required if c not in header]
     if missing:
-        problems.append(
-            f"sheet '{name}': missing column(s) {', '.join(repr(m) for m in missing)}; "
-            "keep the column headers of the template"
-        )
+        problems.append(f"sheet '{sheet}': missing column(s) {', '.join(repr(m) for m in missing)}")
         return []
-    index = {c: header.index(c) for c in required}
-    records = []
+    index = {c: header.index(c) for c in required + optional if c in header}
+    out = []
     for i, row in enumerate(rows[1:], start=2):
         rec = {c: clean_cell(row[j]) if j < len(row) else "" for c, j in index.items()}
-        filled = [c for c, v in rec.items() if v]
-        if not filled:
+        if not any(rec.values()):
             continue
-        if len(filled) < len(required):
-            empty = [c for c in required if not rec[c]]
-            problems.append(f"sheet '{name}', row {i}: empty cell(s) in {', '.join(repr(e) for e in empty)}")
+        empty = [c for c in required if not rec[c]]
+        if empty:
+            problems.append(f"sheet '{sheet}', row {i}: empty cell(s) in {', '.join(repr(e) for e in empty)}")
             continue
-        records.append((i, rec))
-    return records
+        for c in optional:
+            rec.setdefault(c, "")
+        out.append((i, rec))
+    return out
 
 
-def _taxonomy(rows: list[list[str]], problems: list[str]) -> dict[str, list[str]]:
-    if not rows:
-        problems.append("sheet 'taxonomy' is empty: add at least one list (header = list name)")
-        return {}
-    header = [clean_cell(h) for h in rows[0]]
-    width = max(len(r) for r in rows)
-    header += [""] * (width - len(header))
-    lists: dict[str, list[str]] = {}
-    for j, name in enumerate(header):
-        terms: list[str] = []
-        for i, row in enumerate(rows[1:], start=2):
-            if j < len(row):
-                term = clean_cell(row[j])
-                if not term:
-                    continue
-                if not _HAS_WORD.search(term.replace("*", "")):
-                    problems.append(f"sheet 'taxonomy', row {i}: term {term!r} has no letters or digits")
-                    continue
-                if term not in terms:
-                    terms.append(term)
-        if not name:
-            if terms:
-                problems.append(f"sheet 'taxonomy', column {j + 1}: terms without a list name in the header row")
-            continue
-        if name in lists:
-            problems.append(f"sheet 'taxonomy': list name {name!r} is used for more than one column")
-            continue
-        if not terms:
-            problems.append(f"sheet 'taxonomy': list {name!r} has no terms (an empty list would match every sentence)")
-        lists[name] = terms
-    if not lists:
-        problems.append("sheet 'taxonomy': no lists found")
-    return lists
+def _bool(value: str) -> bool | None:
+    v = value.lower()
+    return True if v in ("true", "yes", "1") else False if v in ("false", "no", "0") else None
 
 
-def load_framework(path: str | Path, sentiment_enabled: bool = True) -> Framework:
-    """Read and validate the framework; raises ValidationError listing every problem."""
+def _settings(records, problems: list[str]) -> Settings:
+    s = Settings()
+    seen: dict[str, int] = {}
+    for i, rec in records:
+        key, value = rec["key"].lower(), rec["value"]
+        where = f"sheet 'settings', row {i}"
+        if key in seen:
+            problems.append(f"{where}: setting {key!r} is already set in row {seen[key]}")
+            continue
+        seen[key] = i
+        if not hasattr(s, key):
+            problems.append(f"{where}: unknown setting {key!r} (known: {', '.join(Settings.__dataclass_fields__)})")
+            continue
+        default = getattr(s, key)
+        if isinstance(default, bool):
+            b = _bool(value)
+            if b is None:
+                problems.append(f"{where}: {key} must be true or false, not {value!r}")
+                continue
+            setattr(s, key, b)
+        else:
+            try:
+                setattr(s, key, float(value.replace(",", ".")))
+            except ValueError:
+                problems.append(f"{where}: {key} must be a number, not {value!r}")
+    if not (-1 <= s.sentiment_negative_threshold <= 0 <= s.sentiment_positive_threshold <= 1):
+        problems.append("sheet 'settings': thresholds must satisfy "
+                        "-1 <= sentiment_negative_threshold <= 0 <= sentiment_positive_threshold <= 1")
+    return s
+
+
+def _parent_of(number: str) -> str | None:
+    return number.rsplit(".", 1)[0] if "." in number else None
+
+
+def load_framework(path: str | Path) -> Framework:
+    """Read and validate a framework; raises ValidationError listing every problem."""
     path = Path(path)
     if not path.is_file():
         raise ValidationError("Assessment framework not found", [f"file does not exist: {path}"])
+    if path.suffix.lower() not in SUFFIXES:
+        raise ValidationError("Assessment framework has an unsupported file type",
+                              [f"{path.name}: use .ods (LibreOffice) or .xlsx (Excel)"])
     try:
-        raw = read_ods(path)
-    except Exception as exc:  # zip/xml errors: not an .ods file
-        raise ValidationError("Assessment framework is not a readable .ods file", [f"{path}: {exc}"]) from exc
-    sheets = {clean_cell(k): v for k, v in raw.items()}
+        raw = read_workbook(path)
+    except Exception as exc:
+        raise ValidationError("Assessment framework could not be read", [f"{path}: {exc}"]) from exc
+    sheets = {clean_cell(k).lower(): v for k, v in raw.items()}
+    title = f"Assessment framework {path.name} is invalid"
+
+    # --- format version first: without it nothing else can be interpreted (R2)
     problems: list[str] = []
-    for sheet in SHEETS:
+    meta: dict[str, str] = {}
+    if "meta" not in sheets:
+        raise ValidationError(title, ["sheet 'meta' is missing, so this is not a CtrlFindr framework of format "
+                                      f"{FORMAT_VERSION}; start from the template in the template/ folder"])
+    for i, rec in _records("meta", sheets["meta"], problems):
+        if rec["value"]:  # keys left empty in the template are ignored
+            meta[rec["key"].lower()] = rec["value"]
+    version = meta.get("format_version", "").removesuffix(".0")
+    if not version:
+        problems.append("sheet 'meta': the row 'format_version' is missing")
+    elif version != FORMAT_VERSION:
+        problems.append(f"sheet 'meta': format_version is {version!r}, but this version of CtrlFindr reads "
+                        f"framework format {FORMAT_VERSION}")
+    if problems:
+        raise ValidationError(title, problems)
+    lang = meta.get("language", "en").lower()
+    if lang not in ("en", "english"):
+        problems.append(f"sheet 'meta': language {meta['language']!r} is not supported; CtrlFindr analyzes English (en)")
+    for sheet in REQUIRED_SHEETS:
         if sheet not in sheets:
             problems.append(f"sheet '{sheet}' is missing")
     if problems:
-        raise ValidationError(f"Assessment framework {path.name} is invalid", problems)
+        raise ValidationError(title, problems)
 
-    taxonomy = _taxonomy(sheets["taxonomy"], problems)
-    co_rows = _sheet_records("co_occurrences", sheets["co_occurrences"], SHEETS["co_occurrences"], problems)
-    dc_rows = _sheet_records("doc_conditionals", sheets["doc_conditionals"], SHEETS["doc_conditionals"], problems)
-    q_rows = _sheet_records("search_strings", sheets["search_strings"], SHEETS["search_strings"], problems)
-    v_rows = _sheet_records("variables", sheets["variables"], SHEETS["variables"], problems)
+    settings = _settings(_records("settings", sheets.get("settings", [["key", "value"]]), problems), problems)
 
-    # Every name becomes a column of the same table, so names must be unique across sheets.
+    # --- names: one namespace for lists and queries (R5)
     owners: dict[str, str] = {}
 
-    def claim(name: str, where: str) -> None:
+    def claim(name: str, where: str) -> bool:
+        problem = q.check_name(name)
+        if problem:
+            problems.append(f"{where}: {problem}")
+            return False
         if name in RESERVED:
-            problems.append(f"{where}: name {name!r} is reserved by CtrlFindr; choose another name")
-        elif name in owners:
+            problems.append(f"{where}: name {name!r} is reserved by CtrlFindr")
+            return False
+        if name in owners:
             problems.append(f"{where}: name {name!r} is already used in {owners[name]}")
-        else:
-            owners[name] = where
+            return False
+        owners[name] = where
+        return True
 
-    for name in taxonomy:
-        claim(name, "sheet 'taxonomy'")
-
-    co_occurrences = []
-    for i, rec in co_rows:
-        where = f"sheet 'co_occurrences', row {i}"
-        claim(rec["name of co-occurrence"], where)
-        for col in ("first list", "second list"):
-            if rec[col] not in taxonomy:
-                problems.append(f"{where}: {col} {rec[col]!r} is not a list in the taxonomy sheet")
+    # --- taxonomy (long layout)
+    lists: dict[str, ListSpec] = {}
+    notes: dict[str, str] = {}
+    term_notes: dict[tuple[str, str], str] = {}
+    first_row: dict[str, int] = {}
+    for i, rec in _records("taxonomy", sheets["taxonomy"], problems):
+        name, term = rec["list"].lower(), rec["term"].lower()
+        where = f"sheet 'taxonomy', row {i}"
+        if name not in lists:
+            if not claim(name, f"{where} (list)"):
+                lists.setdefault(f"\x00invalid{i}", ListSpec([]))
+                continue
+            lists[name] = ListSpec([])
+            first_row[name] = i
+        spec = lists[name]
+        if rec["note"] and name not in notes:
+            notes[name] = rec["note"]
+        if term.startswith("-@"):
+            target = term[2:].strip()
+            if target == name:
+                problems.append(f"{where}: list {name!r} cannot exclude itself")
+            elif target not in spec.exclude_lists:
+                spec.exclude_lists.append(target)
+            continue
+        body = term[1:].strip() if term.startswith("-") else term
         try:
-            # Cells are read as displayed; comma-decimal locales show 5.0 as "5,0".
-            dist_f = float(rec["distance between lists"].replace(",", "."))
-            if dist_f != int(dist_f) or dist_f < 0:
-                raise ValueError
-            distance = int(dist_f)
-        except ValueError:
-            problems.append(f"{where}: distance {rec['distance between lists']!r} must be a whole number >= 0")
-            distance = 0
-        co_occurrences.append(CoOccurrence(rec["name of co-occurrence"], rec["first list"], rec["second list"], distance))
+            parse_term(body)
+        except TermError as exc:
+            problems.append(f"{where}: {exc}")
+            continue
+        target_list = spec.exclude_terms if term.startswith("-") else spec.terms
+        if body not in target_list:
+            target_list.append(body)
+        if rec["note"]:
+            term_notes[(name, term)] = rec["note"]
+    lists = {k: v for k, v in lists.items() if not k.startswith("\x00")}
+    for name, spec in lists.items():
+        where = f"sheet 'taxonomy', list {name!r} (row {first_row[name]})"
+        if not spec.terms:
+            problems.append(f"{where}: the list has no terms (only exclusions)")
+        for target in spec.exclude_lists:
+            if target not in lists:
+                problems.append(f"{where}: '-@{target}' refers to a list that does not exist")
+    if not lists:
+        problems.append("sheet 'taxonomy': no lists defined")
 
-    doc_conditionals = []
-    for i, rec in dc_rows:
-        where = f"sheet 'doc_conditionals', row {i}"
-        claim(rec["name of document-level conditional"], where)
-        if rec["list"] not in taxonomy:
-            problems.append(f"{where}: list {rec['list']!r} is not a list in the taxonomy sheet")
-        doc_conditionals.append(DocConditional(rec["name of document-level conditional"], rec["list"]))
-
-    parsed: list[tuple[int, str, str, q.Node | None]] = []
-    for i, rec in q_rows:
-        where = f"sheet 'search_strings', row {i}"
-        claim(rec["query name"], where)
+    # --- queries
+    parsed: list[tuple[int, str, str, q.Node | None, str]] = []
+    for i, rec in _records("queries", sheets["queries"], problems):
+        name = rec["name"].lower()
+        where = f"sheet 'queries', row {i}"
+        claim(name, where)
         try:
             ast: q.Node | None = q.parse(rec["query"])
         except q.QuerySyntaxError as exc:
-            problems.append(f"{where}: query {rec['query name']!r}: {exc}")
+            problems.append(f"{where}: query {name!r}: {exc}")
             ast = None
-        parsed.append((i, rec["query name"], rec["query"], ast))
+        parsed.append((i, name, rec["query"], ast, rec["note"]))
+        if rec["note"]:
+            notes.setdefault(name, rec["note"])
+    query_names = {name for _, name, _, _, _ in parsed}
+    query_ast = {name: ast for _, name, _, ast, _ in parsed}
+    sentiment_names = set(SENTIMENT_TERMS) if settings.sentiment else set()
 
-    query_names = [name for _, name, _, _ in parsed]
-    base_terms = set(taxonomy) | {c.name for c in co_occurrences} | {d.name for d in doc_conditionals}
-    deps: dict[str, set[str]] = {}
-    for i, name, _, ast in parsed:
-        if ast is None:
-            deps.setdefault(name, set())
-            continue
-        used = q.terms(ast)
-        for t in sorted(used):
-            if t in SENTIMENT_TERMS:
-                if not sentiment_enabled:
-                    problems.append(
-                        f"sheet 'search_strings', row {i}: query {name!r} uses {t!r} but sentiment "
-                        "analysis is disabled in the configuration"
-                    )
-            elif t not in base_terms and t not in query_names:
+    inline: dict[str, ListSpec] = {}
+    set_lists: dict[int, tuple[str, ...]] = {}
+
+    def resolve_set(node: q.Node, seen: frozenset[str] = frozenset()) -> tuple[str, ...] | None:
+        """Lists whose matches a set argument stands for, or None if it is not a set."""
+        if isinstance(node, q.InlineTerm):
+            return ("{" + node.text + "}",)
+        if isinstance(node, q.Name):
+            if node.name in lists:
+                return (node.name,)
+            if node.name in query_ast and query_ast[node.name] is not None and node.name not in seen:
+                return resolve_set(query_ast[node.name], seen | {node.name})
+            return None
+        if isinstance(node, q.Or):
+            parts = [resolve_set(o, seen) for o in node.operands]
+            return None if any(p is None for p in parts) else tuple(dict.fromkeys(x for p in parts for x in p))
+        return None
+
+    def check_expression(ast: q.Node, where: str, allow_vars: bool, var_numbers: set[str]) -> set[str]:
+        """Report unknown names and wrong arguments; return the query names used."""
+        for n in q.walk(ast):
+            if isinstance(n, q.Name):
+                if n.name in SENTIMENT_TERMS and not settings.sentiment:
+                    problems.append(f"{where}: {n.name!r} needs sentiment, which is switched off in the settings sheet")
+                elif n.name not in lists and n.name not in query_names and n.name not in sentiment_names:
+                    problems.append(f"{where}: {n.name!r} is not a list, query or sentiment flag")
+            elif isinstance(n, q.InlineTerm):
+                if n.text.startswith("-"):
+                    problems.append(f"{where}: {{{n.text}}}: exclusions belong in the taxonomy sheet")
+                    continue
+                try:
+                    parse_term(clean_cell(n.text).lower())
+                    inline.setdefault("{" + n.text + "}", ListSpec([clean_cell(n.text).lower()]))
+                except TermError as exc:
+                    problems.append(f"{where}: {exc}")
+            elif isinstance(n, q.Call) and n.func == "v":
+                if not allow_vars:
+                    problems.append(f"{where}: V({n.args[0]}) can only be used in the variables sheet")
+                elif n.args[0] not in var_numbers:
+                    problems.append(f"{where}: V({n.args[0]}) refers to a variable number that does not exist")
+        for func, arg in q.set_arguments(ast):
+            lists_used = resolve_set(arg)
+            if lists_used is None:
                 problems.append(
-                    f"sheet 'search_strings', row {i}: query {name!r} refers to {t!r}, which is not a "
-                    "taxonomy list, co-occurrence, document-level conditional, sentiment flag or query"
-                )
-        deps[name] = deps.get(name, set()) | {t for t in used if t in query_names}
-    order, cycles = q.dependency_order(deps)
-    for cyc in cycles:
-        problems.append("sheet 'search_strings': queries refer to each other in a loop: " + " -> ".join(cyc))
+                    f"{where}: {func.upper()} needs word positions, but {q.to_text(arg)!r} is not a list, "
+                    "a {term}, or an OR of those (queries count only if they are defined that way)")
+            else:
+                set_lists[id(arg)] = lists_used
+        return q.names(ast) & query_names
 
-    variables = []
+    deps: dict[str, set[str]] = {}
+    for i, name, _, ast, _ in parsed:
+        deps.setdefault(name, set())
+        if ast is not None:
+            deps[name] |= check_expression(ast, f"sheet 'queries', row {i}: query {name!r}", False, set())
+    query_order, cycles = q.dependency_order(deps)
+    for cyc in cycles:
+        problems.append("sheet 'queries': queries refer to each other in a loop: " + " -> ".join(cyc))
+
+    # --- variables
+    v_rows = _records("variables", sheets["variables"], problems)
     numbers: dict[str, int] = {}
     for i, rec in v_rows:
-        where = f"sheet 'variables', row {i}"
-        # Comma-decimal locales display a numeric 1.1 as "1,1"; variable numbers use dots.
-        number = rec["variable number"].replace(",", ".")
+        number = rec["number"].replace(",", ".").rstrip(".")
         if not _VAR_NUMBER.fullmatch(number):
-            problems.append(f"{where}: variable number {number!r} must look like 1, 1.1 or 1.1.1")
-        key = number.rstrip(".")
-        if key in numbers:
-            problems.append(f"{where}: variable number {number!r} is already used in row {numbers[key]}")
-        numbers.setdefault(key, i)
-        agg = rec["aggregation query"]
-        if not _AGGREGATION.fullmatch(agg):
-            problems.append(
-                f'{where}: aggregation query {agg!r} must be query names in double quotes separated by '
-                'commas, e.g. "a1", "a2"'
-            )
-            children: tuple[str, ...] = ()
+            problems.append(f"sheet 'variables', row {i}: number {rec['number']!r} must look like 1, 1.1 or 1.1.1")
+        elif number in numbers:
+            problems.append(f"sheet 'variables', row {i}: number {number!r} is already used in row {numbers[number]}")
         else:
-            children = tuple(c.strip() for c in re.findall(r'"([^"]+)"', agg))
-            for c in children:
-                if c not in query_names:
-                    problems.append(f"{where}: {c!r} is not a query name in the search_strings sheet")
-        var = Variable(number, rec["variable"], children)
-        claim(var.column, where)
-        variables.append(var)
+            numbers[number] = i
+    variables: list[Variable] = []
+    for i, rec in v_rows:
+        where = f"sheet 'variables', row {i}"
+        number = rec["number"].replace(",", ".").rstrip(".")
+        if number not in numbers or numbers[number] != i:
+            continue
+        parent = rec["parent"].replace(",", ".").rstrip(".") or None
+        if parent is not None and parent not in numbers:
+            problems.append(f"{where}: parent {parent!r} is not a variable number")
+            parent = None
+        if parent is None:
+            implied = _parent_of(number)
+            while implied and implied not in numbers:
+                implied = _parent_of(implied)
+            parent = implied
+        if parent == number:
+            problems.append(f"{where}: a variable cannot be its own parent")
+            parent = None
+        ast = None
+        if rec["definition"]:
+            try:
+                ast = q.parse(rec["definition"])
+            except q.QuerySyntaxError as exc:
+                problems.append(f"{where}: variable {number}: {exc}")
+        variables.append(Variable(number, rec["name"], rec["definition"], ast, parent, rec["note"]))
+    by_number = {v.number: v for v in variables}
+    for v in variables:
+        if v.parent in by_number:
+            by_number[v.parent].children.append(v.number)
+    var_deps: dict[str, set[str]] = {}
+    for v in variables:
+        where = f"sheet 'variables', row {numbers[v.number]}: variable {v.number}"
+        var_deps[v.number] = set()
+        if v.ast is not None:
+            check_expression(v.ast, where, True, set(numbers))
+            var_deps[v.number] |= q.variable_refs(v.ast)
+        elif not v.text:
+            if not (settings.aggregate_children and v.children):
+                problems.append(f"sheet 'variables', row {numbers[v.number]}: variable {v.number} has no definition"
+                                + ("" if settings.aggregate_children else
+                                   " (it can be left empty only with aggregate_children = true and child variables)"))
+        if settings.aggregate_children:
+            var_deps[v.number] |= set(v.children)
+    # parent chains must not loop
+    for v in variables:
+        seen, p = {v.number}, v.parent
+        while p:
+            if p in seen:
+                problems.append(f"sheet 'variables': parent relations form a loop at variable {v.number}")
+                break
+            seen.add(p)
+            p = by_number[p].parent if p in by_number else None
+    variable_order, vcycles = q.dependency_order(var_deps)
+    for cyc in vcycles:
+        problems.append("sheet 'variables': variables refer to each other in a loop: " + " -> ".join(cyc))
     if not variables and not problems:
-        problems.append("sheet 'variables' has no variables, so there would be nothing to export")
+        problems.append("sheet 'variables' defines no variables, so there would be nothing to export")
+
+    # --- tests (R3)
+    tests: list[TestCase] = []
+    known = set(lists) | query_names | sentiment_names | set(numbers)
+    for i, rec in _records("tests", sheets.get("tests", [["sentence"]]), problems):
+        where = f"sheet 'tests', row {i}"
+        expect = {}
+        for col in ("expect_true", "expect_false"):
+            items = tuple(x.strip().lower().rstrip(".") if _VAR_NUMBER.fullmatch(x.strip().rstrip(".")) else x.strip().lower()
+                          for x in re.split(r"[,;\n]", rec[col]) if x.strip())
+            for x in items:
+                if x not in known:
+                    problems.append(f"{where}: {col} names {x!r}, which is not a list, query, sentiment flag or variable number")
+            expect[col] = items
+        if not expect["expect_true"] and not expect["expect_false"] and not rec["group"]:
+            # rows in a group may be context only (e.g. the sentence that makes DOC(x) true)
+            problems.append(f"{where}: the test has no expect_true or expect_false entries (and no group)")
+        try:
+            paragraph = int(float(rec["paragraph"])) if rec["paragraph"] else 1
+        except ValueError:
+            problems.append(f"{where}: paragraph {rec['paragraph']!r} must be a whole number")
+            paragraph = 1
+        tests.append(TestCase(i, rec["group"] or f"row {i}", paragraph, rec["sentence"],
+                              expect["expect_true"], expect["expect_false"], rec["note"]))
+
+    # exclusion loops between lists
+    if not problems:
+        from .matching import Matcher
+
+        try:
+            Matcher(lists)
+        except TermError as exc:
+            problems.append(f"sheet 'taxonomy': {exc}")
 
     if problems:
-        raise ValidationError(f"Assessment framework {path.name} is invalid", problems)
-
-    queries = [Query(name, text, ast) for _, name, text, ast in parsed if ast is not None]
+        raise ValidationError(title, problems)
     return Framework(
         path=path,
         sha256=sha256_file(path),
-        taxonomy=taxonomy,
-        co_occurrences=co_occurrences,
-        doc_conditionals=doc_conditionals,
-        queries=queries,
-        query_order=order,
+        meta=meta,
+        settings=settings,
+        lists=lists,
+        inline=inline,
+        notes=notes,
+        term_notes=term_notes,
+        queries=[Query(name, text, ast, note) for _, name, text, ast, note in parsed],
+        query_order=query_order,
         variables=variables,
+        variable_order=variable_order,
+        tests=tests,
+        set_lists=set_lists,
     )

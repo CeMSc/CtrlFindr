@@ -3,119 +3,112 @@ import time
 
 import pytest
 
-from ctrlfindr.matching import Matcher, co_occurrence_column, co_occurs, term_regex, word_tokens
+from ctrlfindr.matching import (ListSpec, Matcher, TermError, count, count_distinct, near, not_near, parse_term,
+                                word_tokens)
 
 
-def lists_found(taxonomy, sentence):
-    m = Matcher(taxonomy)
-    return {name for name, spans in zip(m.lists, m.spans(sentence)) if spans}
+def found(lists, sentence):
+    m = Matcher({k: v if isinstance(v, ListSpec) else ListSpec(v) for k, v in lists.items()})
+    return {name: [sentence[s:e] for s, e, _ in ms] for name, ms in zip(m.lists, m.matches(sentence))}
 
 
 @pytest.mark.parametrize("term,sentence,hit", [
-    ("flood", "the flood came", True),
-    ("flood", "the floods came", False),          # whole words only
-    ("flood*", "the floods came", True),
-    ("flood*", "flash-flooding", True),           # hyphen is a boundary
-    ("flash flood*", "a flash flooding event", True),
-    ("climat*", "anticlimatic", False),
-    ("u.s.", "the u.s. policy", True),            # term ending in punctuation (v2.1 never matched this)
-    ("biodivers* loss", "biodiversity loss is", True),  # inner wildcard
-    ("*fire", "a bushfire", True),                # leading wildcard
-    ("co2", "co2 emissions", True),
-    ("niño", "el niño year", True),               # non-ASCII letters are word characters
-    ("niño", "el niños year", False),
-    ("ipcc", "the ipcc_report", False),           # underscore is a word character, as in regex \w
+    ("flood", "the flood came", True), ("flood", "the floods came", False), ("flood*", "the floods came", True),
+    ("flood*", "flash-flooding", True), ("flash flood*", "a flash flooding event", True),
+    ("climat*", "anticlimatic", False), ("u.s.", "the u.s. policy", True), ("biodivers* loss", "biodiversity loss", True),
+    ("*fire", "a bushfire", True), ("co2", "co2 emissions", True), ("niño", "el niño year", True),
+    ("niño", "el niños year", False), ("ipcc", "the ipcc_report", False),
+    ("human~wildlife", "human-wildlife conflict", True), ("human~wildlife", "human wildlife conflict", True),
+    ("human~wildlife", "humanwildlife conflict", True), ("human~wildlife", "human/wildlife", False),
+    ("climate _ risk", "climate change risk", True), ("climate _ risk", "climate risk", False),
+    ("climate _ risk", "climate and other risk", False), ("adapt* _ _ change", "adapting to climate change", True),
 ])
 def test_term_semantics(term, sentence, hit):
-    assert bool(lists_found({"l": [term]}, sentence)) is hit
-    assert bool(term_regex(term).search(sentence)) is hit  # automaton == regex definition
+    assert bool(found({"l": [term]}, sentence)["l"]) is hit
+    assert bool(parse_term(term).regex.search(sentence)) is hit  # automaton == regex definition
 
 
-def test_automaton_equals_regex_alternation_on_random_terms():
-    terms = ["climate change", "climat*", "warm*", "heat", "heat wave*", "sea level*", "rise", "drought*", "el niño"]
-    rx = re.compile("|".join(term_regex(t).pattern for t in terms))
-    sentences = ["the climate is changing", "heatwaves and heat waves", "sea levels rise", "warming", "el niño and la niña",
-                 "nothing here", "climatechange", "a drought, droughts", "heat-wave"]
-    m = Matcher({"l": terms})
-    for s in sentences:
-        assert bool(m.spans(s)[0]) == bool(rx.search(s)), s
+def test_automaton_equals_regex_on_mixed_terms():
+    terms = ["climate change", "climat*", "warm*", "heat", "heat wave*", "sea level*", "el niño", "human~wildlife",
+             "climate _ risk", "*fire"]
+    rx = re.compile("|".join(parse_term(t).regex.pattern for t in terms))
+    for s in ["the climate is changing", "heatwaves and heat waves", "sea levels", "el niño and la niña", "nothing",
+              "climatechange", "human wildlife", "climate change risk", "wildfire", "heat-wave"]:
+        assert bool(found({"l": terms}, s)["l"]) == bool(rx.search(s)), s
 
 
-def test_term_in_two_lists_and_spans():
-    m = Matcher({"a": ["encroach*", "land"], "b": ["encroach*"]})
-    spans = m.spans("encroachment on land")
-    assert spans[0] == {(0, 12), (16, 20)} and spans[1] == {(0, 12)}
-    hits, keep = m.match(["encroachment on land", "nothing"], keep_spans={"b"})
-    assert hits["a"].tolist() == [True, False] and keep["b"] == [[(0, 12)], None]
+@pytest.mark.parametrize("bad", ["*", "_", "_ risk", "climate _", "~x", "x~", "a ~ b", "a~~b"])
+def test_invalid_terms(bad):
+    with pytest.raises(TermError):
+        parse_term(bad)
 
 
-def span(s, word, nth=0):
-    i = -1
-    for _ in range(nth + 1):
-        i = s.index(word, i + 1)
-    return (i, i + len(word))
+def test_exclusion_phrase_and_list_by_containment():
+    lists = {"clim": ListSpec(["climat*"], ["business climate"], ["idioms"]), "idioms": ListSpec(["climate of fear"])}
+    s = "the business climate and the climate of fear grew while climate change worsened"
+    assert found(lists, s)["clim"] == ["climate"]  # only the last mention counts
+    assert found(lists, "the business climate improved")["clim"] == []
 
 
-def test_distance_counts_words_strictly_between():
+def test_exclusion_only_removes_contained_matches():
+    lists = {"clim": ListSpec(["climate change"], ["climate"])}
+    assert found(lists, "climate change")["clim"] == ["climate change"]  # longer than the exclusion
+
+
+def test_exclusion_loop_is_rejected():
+    with pytest.raises(TermError, match="loop"):
+        Matcher({"a": ListSpec(["x"], [], ["b"]), "b": ListSpec(["y"], [], ["a"])})
+
+
+def test_entry_ids_are_unique_across_lists():
+    m = Matcher({"a": ListSpec(["flood*"]), "b": ListSpec(["drought*"])})
+    fa, fb = m.matches("floods and droughts")
+    assert count_distinct(fa + fb) == 2
+
+
+def test_count_and_count_distinct():
+    m = Matcher({"h": ListSpec(["flood*", "drought*", "climat*", "climate change"])})
+    (h,) = m.matches("floods, more floods and drought")
+    assert count(h) == 3 and count_distinct(h) == 2
+    (c,) = m.matches("climate change")  # climat* inside climate change counts once
+    assert count(c) == 1 and count_distinct(c) == 1
+
+
+def span(s, word, entry=0):
+    i = s.index(word)
+    return (i, i + len(word), entry)
+
+
+def test_near_distance_is_words_between():
     s = "increase the adaptive capacity"
+    t = word_tokens(s)
     a, b = [span(s, "increase")], [span(s, "capacity")]
-    assert co_occurs(s, a, b, 2) and not co_occurs(s, a, b, 1)
-    adj = "increase capacity"
-    assert co_occurs(adj, [span(adj, "increase")], [span(adj, "capacity")], 0)
+    assert near(t, a, b, 2) and not near(t, a, b, 1)
+    assert near(t, b, a, 2)  # any order
+    assert not near(t, b, a, 2, ordered=True) and near(t, a, b, 2, ordered=True)
 
 
-def test_distance_ignores_order_and_punctuation_tokens():
+def test_near_ignores_punctuation_and_overlap():
     s = "capacity - which we increase"
-    assert co_occurs(s, [span(s, "increase")], [span(s, "capacity")], 2)  # "-" is not a word
-    assert not co_occurs(s, [span(s, "increase")], [span(s, "capacity")], 1)
+    t = word_tokens(s)
+    assert near(t, [span(s, "increase")], [span(s, "capacity")], 2)
+    same = [span(s, "capacity")]
+    assert not near(t, same, same, 5)  # a word never co-occurs with itself
 
 
-def test_same_word_in_both_lists_is_not_a_co_occurrence():
-    """v2.1 bug: encroach* in both lists co-occurred with itself at distance 0."""
-    s = "human encroachment continues"
-    sp = [span(s, "encroachment")]
-    assert not co_occurs(s, sp, sp, 5)
-    m = Matcher({"x": ["encroach*"], "y": ["encroach*"]})
-    _, keep = m.match([s], {"x", "y"})
-    assert not co_occurs(s, keep["x"][0], keep["y"][0], 5)
+def test_not_near():
+    s = "conflict here, then many many many many words, then conflict near wildlife"
+    t = word_tokens(s)
+    first, second = (s.index("conflict"), s.index("conflict") + 8, 0), (s.rindex("conflict"), s.rindex("conflict") + 8, 0)
+    w = [span(s, "wildlife")]
+    assert not_near(t, [first, second], w, 2)      # the first conflict has no wildlife nearby
+    assert not not_near(t, [second], w, 2)
+    assert not_near(t, [second], [], 2) and not not_near(t, [], w, 2)
 
 
-def test_overlapping_matches_do_not_count():
-    s = "climate change matters"
-    assert not co_occurs(s, [span(s, "climate")], [(0, len("climate change"))], 3)
-
-
-def test_nearest_pair_is_used():
-    s = "increase " + "x " * 10 + "capacity and increase capacity"
-    m = Matcher({"i": ["increase"], "c": ["capacity"]})
-    _, keep = m.match([s], {"i", "c"})
-    assert co_occurs(s, keep["i"][0], keep["c"][0], 0)
-
-
-def test_long_segment_is_fast():
-    s = " ".join(["increase the risk of conflict and reduce capacity"] * 600)  # ~4,800 words
-    m = Matcher({"i": ["increas*", "rise"], "c": ["capacit*", "resilien*"]})
-    t = time.perf_counter()
-    _, keep = m.match([s] * 5, {"i", "c"})
-    for k in range(5):
-        co_occurs(s, keep["i"][k], keep["c"][k], 0)
-    assert time.perf_counter() - t < 5  # v2.1 needed tens of seconds for this
-
-
-def test_word_tokens_skip_punctuation_and_are_linear():
+def test_word_tokens_linear_on_punctuation_runs():
     s = "increase - the, (capacity) " + "=" * 200_000 + " end"
-    t = time.perf_counter()
+    t0 = time.perf_counter()
     starts, ends = word_tokens(s)
-    assert time.perf_counter() - t < 1  # the earlier regex took minutes on such runs
+    assert time.perf_counter() - t0 < 1
     assert [s[a:b] for a, b in zip(starts, ends)] == ["increase", "the,", "(capacity)", "end"]
-
-
-def test_token_cache_is_shared_between_rules():
-    sents = ["increase the capacity", "nothing"]
-    m = Matcher({"i": ["increase"], "c": ["capacity"]})
-    _, keep = m.match(sents, {"i", "c"})
-    cache: dict = {}
-    a = co_occurrence_column(sents, keep["i"], keep["c"], 1, cache)
-    b = co_occurrence_column(sents, keep["c"], keep["i"], 0, cache)
-    assert a.tolist() == [True, False] and b.tolist() == [False, False]
-    assert list(cache) == [0]  # tokenized once, only the sentence where both lists matched

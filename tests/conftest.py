@@ -13,11 +13,6 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 
 @pytest.fixture(scope="session")
-def example_framework_path() -> Path:
-    return EXAMPLE / "Input" / "Assessment_framework.ods"
-
-
-@pytest.fixture(scope="session")
 def golden_v21_sentences() -> pd.DataFrame:
     """Sentence table committed with CtrlFindr 2.1 (input for analysis-stage tests)."""
     return pd.read_csv(FIXTURES / "golden_v2.1" / "results_sentences.tsv", sep="\t")

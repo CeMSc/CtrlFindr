@@ -1,5 +1,7 @@
-"""Project configuration (``ctrlfindr.toml``).
+"""Project configuration (``ctrlfindr.toml``): where files are and how the corpus is read.
 
+Everything that changes how sentences are coded (sentiment thresholds and so on) lives in
+the framework's settings sheet instead, so a framework fully defines its coding.
 Relative paths are resolved against the folder that contains the config file, so the
 same project folder works on Windows and Linux and from any working directory.
 """
@@ -20,6 +22,7 @@ class Paths:
     framework: Path = Path("Input/Assessment_framework.ods")
     output: Path = Path("Output")
     database: Path = Path("Output/analysis.sqlite")
+    validation: Path = Path("Input/validation.tsv")  # hand-coded sentences; used if the file exists
 
 
 @dataclass
@@ -27,13 +30,6 @@ class IngestSettings:
     text_cleaning: bool = True          # remove URLs, collapse "..." to "."
     encoding_errors: str = "strict"     # "strict": stop on non-UTF-8 files; "replace": substitute bad bytes
     long_segment_words: int = 500       # warn about "sentences" longer than this
-
-
-@dataclass
-class SentimentSettings:
-    enabled: bool = True
-    positive_threshold: float = 0.05    # compound >= this is positive
-    negative_threshold: float = -0.05   # compound <= this is negative
 
 
 @dataclass
@@ -46,7 +42,6 @@ class ExportSettings:
 class Config:
     paths: Paths = field(default_factory=Paths)
     ingest: IngestSettings = field(default_factory=IngestSettings)
-    sentiment: SentimentSettings = field(default_factory=SentimentSettings)
     export: ExportSettings = field(default_factory=ExportSettings)
     source: Path | None = None  # the config file, if loaded from one
 
@@ -57,12 +52,15 @@ class Config:
         return d
 
 
-_SECTIONS = {"paths": Paths, "ingest": IngestSettings, "sentiment": SentimentSettings, "export": ExportSettings}
+_SECTIONS = {"paths": Paths, "ingest": IngestSettings, "export": ExportSettings}
 
 
 def _build(raw: dict[str, Any], base: Path, problems: list[str]) -> Config:
     cfg = Config()
     for section, value in raw.items():
+        if section == "sentiment":
+            problems.append("[sentiment] is not a config setting: sentiment is set in the framework's settings sheet")
+            continue
         if section not in _SECTIONS:
             problems.append(f"unknown section [{section}] (allowed: {', '.join(_SECTIONS)})")
             continue
@@ -100,9 +98,6 @@ def _build(raw: dict[str, Any], base: Path, problems: list[str]) -> Config:
             setattr(cfg.paths, key, (base / p).resolve())
     if cfg.ingest.encoding_errors not in ("strict", "replace"):
         problems.append('[ingest] encoding_errors must be "strict" or "replace"')
-    s = cfg.sentiment
-    if not (-1 <= s.negative_threshold <= 0 <= s.positive_threshold <= 1):
-        problems.append("[sentiment] thresholds must satisfy -1 <= negative_threshold <= 0 <= positive_threshold <= 1")
     return cfg
 
 

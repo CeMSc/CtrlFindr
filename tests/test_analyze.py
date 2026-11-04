@@ -1,3 +1,4 @@
+import json
 import logging
 import sqlite3
 
@@ -6,63 +7,57 @@ import pandas as pd
 import pytest
 
 from ctrlfindr import analyze, config_from_dict, ingest
-from ctrlfindr.common import CtrlFindrError
-from ctrlfindr.config import SentimentSettings
+from ctrlfindr.common import CtrlFindrError, ValidationError
+from ctrlfindr.engine import analyze_sentences
 from ctrlfindr.framework import load_framework
-from odsutil import framework_sheets, write_ods
+from fwutil import make_framework
 
-
-def test_sentiment_flags_default_and_v21_thresholds():
-    c = np.array([-0.5, -0.05, -0.01, 0.0, 0.01, 0.05, 0.9])
-    f = analyze.sentiment_flags(c, SentimentSettings())
-    assert f["sentiment_positive"].tolist() == [0, 0, 0, 0, 0, 1, 1]
-    assert f["sentiment_negative"].tolist() == [1, 1, 0, 0, 0, 0, 0]
-    assert f["sentiment_neutral"].tolist() == [0, 0, 1, 1, 1, 0, 0]
-    assert (f["sentiment_neutralpositive"] == (f["sentiment_neutral"] | f["sentiment_positive"])).all()
-    v21 = analyze.sentiment_flags(c, SentimentSettings(positive_threshold=0, negative_threshold=0))
-    assert v21["sentiment_positive"].tolist() == (c > 0).tolist()
-    assert v21["sentiment_neutral"].tolist() == (c == 0).tolist()
-    assert v21["sentiment_negative"].tolist() == (c < 0).tolist()
+TAX = [("risk", "risk*"), ("flood", "flood*"), ("ipcc", "ipcc")]
+QUERIES = [("q1", "NEAR(risk, flood, 2)"), ("q2", "q1 AND DOC(ipcc)"), ("q3", "flood AND sentiment_negative")]
+VARIABLES = [("1", "Risk", "q1"), ("1.1", "IPCC risk", "q2"), ("2", "Bad floods", "q3")]
 
 
 @pytest.fixture
 def small_fw(tmp_path):
-    sheets = framework_sheets(
-        taxonomy={"risk": ["risk*"], "flood": ["flood*"], "ipcc": ["ipcc"]},
-        co=[("co_rf", "risk", "2", "flood")],
-        dc=[("doc_ipcc", "ipcc")],
-        queries=[("q1", '"co_rf"'), ("q2", '"q1" and "doc_ipcc"'), ("q3", '"flood" and "sentiment_negative"')],
-        variables=[("risk", "1", '"q1"'), ("ipcc risk", "1.1", '"q2"'), ("bad floods", "2", '"q3"')],
-    )
-    return load_framework(write_ods(tmp_path / "fw.ods", sheets))
+    return load_framework(make_framework(tmp_path / "fw.ods", TAX, QUERIES, VARIABLES))
 
 
-def test_analysis_and_document_tables(small_fw):
+def project(tmp_path, fw_path, text="Flood risk rises. The IPCC agrees.", **cfg):
+    (tmp_path / "Text_files").mkdir(exist_ok=True)
+    (tmp_path / "Text_files" / "d1.txt").write_text(text, encoding="utf-8")
+    return config_from_dict({"paths": {"framework": str(fw_path)}, **cfg}, base=tmp_path)
+
+
+def test_document_tables(small_fw):
     sents = pd.DataFrame({
         "document": ["d1", "d1", "d2", "d2"],
         "text": ["Flood risk rises.", "The IPCC agrees.", "Risk of terrible flooding.", "Calm day."],
         "vader_compound": [0.2, 0.0, -0.6, 0.3],
     })
-    res = analyze.analyze_sentences(sents, small_fw, SentimentSettings())
-    assert res["co_rf"].tolist() == [True, False, True, False]
-    assert res["doc_ipcc"].tolist() == [True, True, False, False]
-    assert res["q2"].tolist() == [True, False, False, False]  # query chaining
-    assert res["sentences"].tolist()[0] == "flood risk rises."
-    docs = analyze.document_outputs(res, small_fw, sentiment=True)
+    res = analyze_sentences(sents, small_fw)
+    docs = analyze.document_outputs(res, small_fw)
     rd = docs["results_document"].set_index("document")
     assert rd.loc["d1"].tolist() == [1, 1, 0] and rd.loc["d2"].tolist() == [1, 0, 1]
-    pct = docs["results_document_percentage_of_sentences"].set_index("document")
-    assert pct.loc["d1", "1. risk"] == 50.0
+    assert docs["results_document_percentage_of_sentences"].set_index("document").loc["d1", "1. Risk"] == 50.0
     sent = docs["results_document_sentiment"].set_index("document")
-    assert sent.loc["d2", "2. bad floods"] == -0.6
-    assert np.isnan(sent.loc["d1", "2. bad floods"])  # variable never fired in d1 -> empty cell
+    assert sent.loc["d2", "2. Bad floods"] == -0.6
+    assert np.isnan(sent.loc["d1", "2. Bad floods"])  # never fired in d1 -> empty cell
 
 
-def test_long_segments_are_reported(small_fw, caplog):
-    sents = pd.DataFrame({"document": ["d"], "text": ["word " * 600], "vader_compound": [0.0]})
-    with caplog.at_level(logging.WARNING, logger="ctrlfindr"):
-        analyze.analyze_sentences(sents, small_fw, SentimentSettings(), long_segment_words=500)
-    assert "longer than 500 words" in caplog.text
+def test_run_writes_outputs_and_keeps_source_tables(tmp_path, small_fw):
+    cfg = project(tmp_path, small_fw.path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)  # a second run still finds its input
+    with sqlite3.connect(cfg.paths.database) as conn:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"documents", "sentences", "results_sentences"} <= tables
+    out = cfg.paths.output
+    assert b"\r\n" not in (out / "results_document.tsv").read_bytes()
+    assert "## Variables" in (out / "codebook.md").read_text(encoding="utf-8")
+    meta = json.loads((out / "run_metadata.json").read_text(encoding="utf-8"))
+    assert meta["framework"]["settings"]["sentiment_positive_threshold"] == 0.05
+    assert meta["framework"]["meta"]["format_version"] == "1"
 
 
 def test_run_requires_ingest(tmp_path, small_fw):
@@ -71,30 +66,37 @@ def test_run_requires_ingest(tmp_path, small_fw):
         analyze.run(cfg, show_progress=False)
 
 
-def test_run_keeps_source_tables_and_writes_lf(tmp_path, small_fw):
-    (tmp_path / "Text_files").mkdir()
-    (tmp_path / "Text_files" / "d1.txt").write_text("Flood risk rises. The IPCC agrees.", encoding="utf-8")
-    cfg = config_from_dict({"paths": {"framework": str(small_fw.path)}}, base=tmp_path)
-    ingest.run(cfg, show_progress=False)
-    analyze.run(cfg, show_progress=False)
-    analyze.run(cfg, show_progress=False)  # a second run must still find its input (v2.1 overwrote it)
-    with sqlite3.connect(cfg.paths.database) as conn:
-        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {"documents", "sentences", "results_sentences"} <= tables
-        assert conn.execute("SELECT COUNT(*) FROM sentences").fetchone()[0] == 2
-    raw = (cfg.paths.output / "results_document.tsv").read_bytes()
-    assert b"\r\n" not in raw
-    assert (cfg.paths.output / "run_metadata.json").is_file()
-
-
 def test_outputs_of_earlier_runs_are_removed(tmp_path, small_fw):
-    (tmp_path / "Text_files").mkdir()
-    (tmp_path / "Text_files" / "d1.txt").write_text("Flood risk rises.", encoding="utf-8")
-    cfg = config_from_dict({"paths": {"framework": str(small_fw.path)}}, base=tmp_path)
+    cfg = project(tmp_path, small_fw.path)
     ingest.run(cfg, show_progress=False)
     analyze.run(cfg, show_progress=False)
-    assert (cfg.paths.output / "results_document_sentiment.tsv").is_file()
     cfg.export.sentence_level = False
     analyze.run(cfg, show_progress=False)
     assert not (cfg.paths.output / "results_sentences.tsv").exists()
     assert (cfg.paths.output / "results_document.tsv").is_file()
+
+
+def test_failing_framework_tests_stop_or_warn(tmp_path, caplog):
+    tests = [("Floods are wonderful, great and lovely.", "q3", "")]  # q3 needs negative sentiment: fails
+    path = make_framework(tmp_path / "fw.ods", TAX, QUERIES, VARIABLES, tests=tests)
+    cfg = project(tmp_path, path)
+    ingest.run(cfg, show_progress=False)
+    with pytest.raises(ValidationError, match="framework test"):
+        analyze.run(cfg, show_progress=False)
+    path = make_framework(tmp_path / "fw2.ods", TAX, QUERIES, VARIABLES, tests=tests, settings={"tests_must_pass": False})
+    cfg.paths.framework = path
+    with caplog.at_level(logging.WARNING, logger="ctrlfindr"):
+        analyze.run(cfg, show_progress=False)
+    assert "expected q3 to be true" in caplog.text
+
+
+def test_long_segments_are_reported(small_fw, caplog):
+    sents = pd.DataFrame({"document": ["d"], "text": ["word " * 600], "vader_compound": [0.0]})
+    with caplog.at_level(logging.WARNING, logger="ctrlfindr"):
+        analyze_sentences(sents, small_fw, long_segment_words=500)
+    assert "longer than 500 words" in caplog.text
+
+
+def test_config_has_no_sentiment_section(tmp_path):
+    with pytest.raises(ValidationError, match="framework's settings sheet"):
+        config_from_dict({"sentiment": {"enabled": True}}, base=tmp_path)

@@ -82,3 +82,115 @@ def read_ods(path: str | Path) -> dict[str, list[list[str]]]:
             rows.extend(list(cells) for _ in range(repeat_rows))
         sheets[table.get(f"{_T}name", "")] = rows
     return sheets
+
+
+# ------------------------------------------------------------------------ writing
+
+_NS = (
+    'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+    'xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+    'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+    'xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+    'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" '
+    'xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2"'
+)
+_MANIFEST = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">'
+    '<manifest:file-entry manifest:full-path="/" manifest:version="1.2" '
+    'manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/>'
+    '<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>'
+    '<manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/>'
+    "</manifest:manifest>"
+)
+_STYLES = f'<?xml version="1.0" encoding="UTF-8"?><office:document-styles {_NS} office:version="1.2"/>'
+
+
+def _esc(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _para(line: str) -> str:
+    # Runs of spaces must be written as <text:s/> to survive.
+    out = []
+    for i, part in enumerate(line.split("  ")):
+        if i:
+            out.append(' <text:s/>')
+        out.append(_esc(part))
+    return f"<text:p>{''.join(out)}</text:p>"
+
+
+def write_ods(path: Path, sheets) -> None:
+    """Write ``SheetSpec`` objects (see ctrlfindr.spreadsheet) to an .ods file."""
+    styles = [
+        '<style:style style:name="ceH" style:family="table-cell"><style:text-properties fo:font-weight="bold"/></style:style>',
+        '<style:style style:name="ceW" style:family="table-cell"><style:table-cell-properties '
+        'fo:wrap-option="wrap" style:vertical-align="top"/></style:style>',
+        '<style:style style:name="ceHW" style:family="table-cell"><style:table-cell-properties '
+        'fo:wrap-option="wrap" style:vertical-align="top"/><style:text-properties fo:font-weight="bold"/></style:style>',
+    ]
+    widths: dict[float, str] = {}
+    validations: list[str] = []
+    tables: list[str] = []
+    for spec in sheets:
+        cols = []
+        for w in spec.widths_cm:
+            if w not in widths:
+                widths[w] = f"co{len(widths) + 1}"
+                styles.append(f'<style:style style:name="{widths[w]}" style:family="table-column">'
+                              f'<style:table-column-properties style:column-width="{w}cm"/></style:style>')
+            cols.append(f'<table:table-column table:style-name="{widths[w]}"/>')
+        dd_names: dict[int, tuple[str, int]] = {}
+        for dd in spec.dropdowns:
+            name = f"val{len(validations) + 1}"
+            if dd.source:
+                sheet, col = dd.source
+                cond = f"of:cell-content-is-in-list([$'{sheet}'.${col}$2:.${col}${dd.rows + 1}])"
+            else:
+                cond = "of:cell-content-is-in-list(" + ";".join(f'"{v}"' for v in dd.values) + ")"
+            validations.append(
+                f'<table:content-validation table:name="{name}" table:condition="{_esc(cond)}" '
+                f'table:allow-empty-cell="true" table:display-list="unsorted" '
+                f"table:base-cell-address=\"$'{_esc(spec.name)}'.$A$2\">"
+                '<table:error-message table:display="false"/></table:content-validation>'
+            )
+            dd_names[dd.column] = (name, dd.rows)
+        width = max([len(r) for r in spec.rows] + [max(dd_names, default=-1) + 1, len(spec.widths_cm), 1])
+        rows_xml = []
+
+        def cell(value: str, r: int, c: int) -> str:
+            attrs = ""
+            if c in dd_names and 1 <= r <= dd_names[c][1]:
+                attrs += f' table:content-validation-name="{dd_names[c][0]}"'
+            style = ("ceHW" if spec.wrap else "ceH") if (spec.header and r == 0) else ("ceW" if spec.wrap else "")
+            if style:
+                attrs += f' table:style-name="{style}"'
+            if value == "":
+                return f"<table:table-cell{attrs}/>"
+            body = "".join(_para(line) for line in str(value).split("\n"))
+            return f'<table:table-cell office:value-type="string"{attrs}>{body}</table:table-cell>'
+
+        for r, row in enumerate(spec.rows):
+            cells = [cell(row[c] if c < len(row) else "", r, c) for c in range(width)]
+            rows_xml.append("<table:table-row>" + "".join(cells) + "</table:table-row>")
+        last_dd_row = max((rows for _, rows in dd_names.values()), default=0)
+        remaining = last_dd_row + 1 - len(spec.rows)
+        if remaining > 0:  # empty rows that still carry the dropdowns
+            cells = [cell("", len(spec.rows), c) for c in range(width)]
+            rows_xml.append(f'<table:table-row table:number-rows-repeated="{remaining}">' + "".join(cells) + "</table:table-row>")
+        tables.append(f'<table:table table:name="{_esc(spec.name)}">' + "".join(cols) + "".join(rows_xml) + "</table:table>")
+
+    content = (
+        f'<?xml version="1.0" encoding="UTF-8"?><office:document-content {_NS} office:version="1.2">'
+        f"<office:automatic-styles>{''.join(styles)}</office:automatic-styles>"
+        "<office:body><office:spreadsheet>"
+        + (f"<table:content-validations>{''.join(validations)}</table:content-validations>" if validations else "")
+        + "".join(tables)
+        + "</office:spreadsheet></office:body></office:document-content>"
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(zipfile.ZipInfo("mimetype"), "application/vnd.oasis.opendocument.spreadsheet",
+                    compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/manifest.xml", _MANIFEST)
+        zf.writestr("content.xml", content)
+        zf.writestr("styles.xml", _STYLES)

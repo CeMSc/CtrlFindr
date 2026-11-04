@@ -16,6 +16,7 @@ dependencies = [
     "pysbd>=0.3.4",
     "vaderSentiment>=3.3.2",
     "pyahocorasick>=2.1",
+    "openpyxl>=3.1",
     "tqdm>=4.60",
 ]
 

@@ -23,7 +23,7 @@ from .config import Config
 log = logging.getLogger("ctrlfindr")
 
 # Bump when cleaning or segmentation logic changes, so existing databases are rebuilt.
-INGEST_REVISION = 2
+INGEST_REVISION = 3
 
 _URL = re.compile(r"http\S+|www\S+|https\S+")
 _ELLIPSIS = re.compile(r"\.{2,}")
@@ -36,7 +36,8 @@ _SCHEMA = (
     f"""CREATE TABLE IF NOT EXISTS {DOCUMENTS} (
         document TEXT PRIMARY KEY, path TEXT NOT NULL, sha256 TEXT NOT NULL, clean_text TEXT NOT NULL)""",
     f"""CREATE TABLE IF NOT EXISTS {SENTENCES} (
-        document TEXT NOT NULL, sentence_id INTEGER NOT NULL, start INTEGER NOT NULL, "end" INTEGER NOT NULL,
+        document TEXT NOT NULL, sentence_id INTEGER NOT NULL, paragraph INTEGER NOT NULL,
+        start INTEGER NOT NULL, "end" INTEGER NOT NULL,
         text TEXT NOT NULL, vader_compound REAL NOT NULL, PRIMARY KEY (document, sentence_id))""",
     f"CREATE TABLE IF NOT EXISTS {META} (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 )
@@ -51,6 +52,7 @@ class SourceFile:
 @dataclass(frozen=True)
 class Sentence:
     sentence_id: int
+    paragraph: int
     start: int
     end: int
     text: str
@@ -110,7 +112,7 @@ class Segmenter:
     def split(self, text: str) -> list[Sentence]:
         out: list[Sentence] = []
         pos = 0
-        for para in text.split("\n\n"):
+        for p_no, para in enumerate(text.split("\n\n"), start=1):
             cursor = 0
             for piece in self._seg.segment(para) if para.strip() else ():
                 s = piece.strip()
@@ -122,7 +124,7 @@ class Segmenter:
                 cursor = k + len(s)
                 if not any(ch.isalpha() for ch in s):  # numbers, punctuation, "[12]" citation marks
                     continue
-                out.append(Sentence(len(out) + 1, pos + k, pos + k + len(s), s))
+                out.append(Sentence(len(out) + 1, p_no, pos + k, pos + k + len(s), s))
             pos += len(para) + 2
         return out
 
@@ -154,7 +156,7 @@ def _prepare_db(conn: sqlite3.Connection, signature: str) -> dict[str, str]:
         return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
 
     expected = {DOCUMENTS: ["document", "path", "sha256", "clean_text"],
-                SENTENCES: ["document", "sentence_id", "start", "end", "text", "vader_compound"]}
+                SENTENCES: ["document", "sentence_id", "paragraph", "start", "end", "text", "vader_compound"]}
     stored = None
     if columns(META) == ["key", "value"]:
         row = conn.execute(f"SELECT value FROM {META} WHERE key='ingest_signature'").fetchone()
@@ -237,9 +239,10 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
                     (d, str(f.path), digest, text),
                 )
                 conn.executemany(
-                    f'INSERT INTO {SENTENCES} (document, sentence_id, start, "end", text, vader_compound) '
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    [(d, s.sentence_id, s.start, s.end, s.text, sia.polarity_scores(s.text)["compound"]) for s in sents],
+                    f'INSERT INTO {SENTENCES} (document, sentence_id, paragraph, start, "end", text, vader_compound) '
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [(d, s.sentence_id, s.paragraph, s.start, s.end, s.text, sia.polarity_scores(s.text)["compound"])
+                     for s in sents],
                 )
                 n_sent += len(sents)
             if empty:

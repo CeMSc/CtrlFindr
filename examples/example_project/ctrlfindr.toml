@@ -1,21 +1,19 @@
-# CtrlFindr project settings. Relative paths are relative to this file's folder.
+# CtrlFindr project settings: where the files are and how the texts are read.
+# How sentences are coded (sentiment thresholds etc.) is set in the framework's settings sheet.
+# Relative paths are relative to this file's folder.
 
 [paths]
 text_files = "Text_files"                        # folder with the .txt documents
-framework  = "Input/Assessment_framework.ods"    # assessment framework
-output     = "Output"                            # results (TSVs, run_metadata.json, log)
+framework  = "Input/Assessment_framework.ods"    # assessment framework (.ods or .xlsx)
+output     = "Output"                            # results (TSVs, codebook, run_metadata.json, log)
 database   = "Output/analysis.sqlite"            # keep on a local disk, not a network drive
+validation = "Input/validation.tsv"              # hand-coded sentences; used only if the file exists
 
 [ingest]
-text_cleaning     = true      # remove URLs; turn ".." and "..." into "."
-encoding_errors   = "strict"  # "strict": stop on files that are not UTF-8; "replace": substitute bad bytes
-long_segment_words = 500      # warn about "sentences" longer than this many words
-
-[sentiment]
-enabled            = true
-positive_threshold = 0.05     # VADER compound >= 0.05 is positive
-negative_threshold = -0.05    # VADER compound <= -0.05 is negative
+text_cleaning      = true      # remove URLs; turn ".." and "..." into "."
+encoding_errors    = "strict"  # "strict": stop on files that are not UTF-8; "replace": substitute bad bytes
+long_segment_words = 500       # warn about "sentences" longer than this many words
 
 [export]
-sentence_level = true         # results_sentences.tsv
-document_level = true         # the four results_document*.tsv files
+sentence_level = true          # results_sentences.tsv
+document_level = true          # the four results_document*.tsv files
