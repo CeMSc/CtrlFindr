@@ -143,3 +143,57 @@ def test_ingest_does_not_need_vader(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "vaderSentiment", None)
     cfg = project(tmp_path, {"a.txt": b"Fine text."})
     assert ingest.run(cfg, show_progress=False)["sentences"] == 1
+
+
+@pytest.mark.parametrize("raw,clean", [
+    ("The report was published.The minister disagreed.", "The report was published. The minister disagreed."),
+    ("It was late?The minister resigned!Then calm.", "It was late? The minister resigned! Then calm."),
+    ("COP28 opened in 2023.The talks ended.", "COP28 opened in 2023. The talks ended."),
+    ("The goal (net zero).Next steps follow.", "The goal (net zero). Next steps follow."),
+    ("The U.S.Army and the U.K.Government", "The U.S.Army and the U.K.Government"),
+    ("She has a Ph.D.Later she moved.", "She has a Ph.D.Later she moved."),
+    ("He lives in St.Louis now.", "He lives in St.Louis now."),
+    ("Section 4.2.Results show", "Section 4.2.Results show"),
+    ("See e.g.The report", "See e.g.The report"),
+])
+def test_missing_space_after_full_stop_is_repaired_in_txt(raw, clean):
+    assert ingest.clean_document(raw, repair_spacing=True) == clean
+    assert ingest.clean_document(raw) == raw  # off unless asked (Markdown keeps its own text)
+
+
+def test_missing_space_repair_applies_to_txt_files(tmp_path):
+    cfg = project(tmp_path, {"a.txt": b"The report was published.The minister disagreed."})
+    ingest.run(cfg, show_progress=False)
+    assert [r[4] for r in sentences(cfg)] == ["The report was published.", "The minister disagreed."]
+
+
+def test_ingest_resumes_after_an_interruption(tmp_path, monkeypatch):
+    cfg = project(tmp_path, {f"d{i}.txt": f"Document {i} text.".encode() for i in range(5)})
+    real = ingest.Segmenter.split
+    calls = {"n": 0}
+
+    def flaky(self, text, labels=None):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise KeyboardInterrupt  # stopped while the third file is processed
+        return real(self, text, labels)
+
+    monkeypatch.setattr(ingest.Segmenter, "split", flaky)
+    with pytest.raises(KeyboardInterrupt):
+        ingest.run(cfg, show_progress=False)
+    with sqlite3.connect(cfg.paths.database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2  # two finished files kept
+        assert conn.execute("SELECT COUNT(*) FROM sentences").fetchone()[0] == 2
+    monkeypatch.setattr(ingest.Segmenter, "split", real)
+    summary = ingest.run(cfg, show_progress=False)
+    assert (summary["processed"], summary["unchanged"], summary["sentences"]) == (3, 2, 5)
+
+
+def test_changed_file_keeps_old_version_until_reprocessed(tmp_path, monkeypatch):
+    cfg = project(tmp_path, {"a.txt": b"Old text."})
+    ingest.run(cfg, show_progress=False)
+    (cfg.paths.text_files / "a.txt").write_bytes(b"New text.")
+    monkeypatch.setattr(ingest.Segmenter, "split", lambda *a: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        ingest.run(cfg, show_progress=False)
+    assert [r[4] for r in sentences(cfg)] == ["Old text."]  # never half-replaced

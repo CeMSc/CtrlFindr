@@ -18,11 +18,14 @@ Version 2.1 is kept in [legacy/](legacy/).
 2. **`ingest`**: reads the `.txt` and `.md` files (see [Text inputs](#text-inputs)),
    normalizes the text, splits it into sentences with
    [pySBD](https://github.com/nipunsadvilkar/pySBD) and stores everything in an SQLite
-   database. Later runs only process new or changed files.
+   database. Later runs only process new or changed files. Each file is saved as soon as it
+   is done, so you can stop an ingest (Ctrl+C) at any time and run it again to continue.
 3. **`analyze`**: codes every sentence and writes the results, a codebook and the run
    metadata. When the framework uses sentiment, it also scores sentences with
    [VADER](https://github.com/cjhutto/vaderSentiment), once per sentence (scores are kept
    for later runs). Run it again after each framework edit; there is no need to ingest again.
+   Sentences are analyzed in batches of whole documents, so memory use does not grow with
+   the corpus. A stopped analysis leaves the previous results as they were.
 
 `run` does ingest and analyze, `template` writes a blank framework, and `sample` draws
 sentences to hand-code (see [Validation](#validation-against-hand-coding)).
@@ -366,6 +369,10 @@ removed):
   onto the next sentence.
 - **Citation marks.** A space is inserted between a full stop and a following citation mark
   (`2050.[4] The` → `2050. [4] The`) so that the sentence splitter separates the sentences.
+- **Missing spaces after a full stop** (`.txt` files only): `published.The minister` becomes
+  `published. The minister`. This applies when the full stop (or `?`, `!`) follows two
+  lower-case letters or digits and is followed by a capitalised word, so `U.S.Army`,
+  `Ph.D.Later`, `St.Louis`, `e.g.The` and `4.2.Results` are left alone.
 - **Junk segments.** Segments that contain no letter (page numbers, `[12]`, lone
   punctuation) are dropped.
 - **Optional cleaning** (`text_cleaning = true`): URLs are removed, and `..` or `...`
@@ -386,6 +393,22 @@ The next ingest rebuilds the database when you:
 - upgrade CtrlFindr or pySBD.
 
 Upgrading vaderSentiment only clears the cached sentiment scores.
+
+## Stopping, resuming and memory
+
+- **Ingest can be stopped and resumed.** Each file is saved in its own transaction as soon
+  as it is processed. If an ingest is stopped (Ctrl+C, a closed terminal, a crash or a killed
+  server job), every finished file stays saved and the next `ingest` or `run` continues with
+  the rest. A file that was being processed when the run stopped keeps its previous version
+  until it is processed again. The command line exits with code 130 after Ctrl+C.
+- **Analysis runs in batches.** Batches are whole documents of about `batch_sentences`
+  sentences (`[analysis]` in `ctrlfindr.toml`, default 50,000). `DOC`, `DOC_SHARE` and
+  `WINDOW` look at whole documents, so batching never changes results. On a test corpus
+  of 50,850 sentences, peak memory was 170 MB in one batch and 89 MB with batches of 5,000.
+  Lower the value if memory is tight.
+- **A stopped analysis changes nothing.** The new results are written next to the old ones
+  and swapped in only when the run completes. Sentiment scores computed before the stop are
+  kept, so the next run does not compute them again.
 
 ## Performance
 

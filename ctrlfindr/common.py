@@ -96,9 +96,10 @@ def setup_logging(level: int = logging.INFO, log_file: Path | None = None) -> No
 DOCUMENTS = "documents"
 SENTENCES = "sentences"
 RESULTS = "results_sentences"
+RESULTS_NEW = "results_sentences_new"  # filled batch by batch, renamed to RESULTS at the end
 SENTIMENT = "sentiment"  # cache of VADER scores, filled by the analysis when sentiment is on
 META = "meta"
-_TABLES = {DOCUMENTS, SENTENCES, RESULTS, SENTIMENT, META}
+_TABLES = {DOCUMENTS, SENTENCES, RESULTS, RESULTS_NEW, SENTIMENT, META}
 
 
 def _table(name: str) -> str:

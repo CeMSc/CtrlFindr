@@ -82,6 +82,9 @@ def main(argv: list[str] | None = None) -> int:
 
             targets = [t.strip() for t in args.variables.split(",") if t.strip()] or None
             sample(cfg, n=args.n, targets=targets, seed=args.seed)
+    except KeyboardInterrupt:
+        print("Stopped. Run the same command again to continue: finished files are kept.", file=sys.stderr)
+        return 130
     except CtrlFindrError as exc:
         if log.handlers:
             log.error("%s", exc)

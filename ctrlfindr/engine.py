@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import operator
+from collections import Counter
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -142,19 +144,53 @@ class Evaluator:
         raise AssertionError(f)
 
 
-def exclude_sentences(sentences: pd.DataFrame, settings: Settings) -> pd.DataFrame:
+@dataclass
+class AnalysisStats:
+    """Counts collected over all batches of an analysis, reported once at the end."""
+
+    excluded: Counter = field(default_factory=Counter)
+    emptied_documents: list[str] = field(default_factory=list)
+    hierarchy: Counter = field(default_factory=Counter)  # (child, parent) -> sentences
+    long_segments: int = 0
+    long_examples: list[str] = field(default_factory=list)
+    long_limit: int = 0
+
+    def report(self) -> None:
+        if self.excluded:
+            log.info("Excluded %d sentence(s) by type: %s", sum(self.excluded.values()),
+                     ", ".join(f"{k} {v}" for k, v in sorted(self.excluded.items())))
+        if self.emptied_documents:
+            gone = self.emptied_documents
+            log.warning("%d document(s) have no sentences left after the exclusion and are not in the results: %s",
+                        len(gone), ", ".join(gone[:10]) + (" ..." if len(gone) > 10 else ""))
+        broken = [(c, p, k) for (c, p), k in self.hierarchy.items() if k]
+        if broken:
+            log.warning(
+                "%d child variable(s) are true in sentences where their parent is false (set "
+                "aggregate_children = true to make parents include their children): %s",
+                len(broken), "; ".join(f"{c} vs parent {p}: {k} sentences" for c, p, k in broken[:5]),
+            )
+        if self.long_segments:
+            log.warning(
+                "%d segment(s) are longer than %d words, which usually means sentence splitting "
+                "failed (tables, reference lists, text without punctuation). They are slow to "
+                "process and distort per-sentence percentages. First: %s",
+                self.long_segments, self.long_limit, ", ".join(self.long_examples),
+            )
+
+
+def exclude_sentences(sentences: pd.DataFrame, settings: Settings, stats: AnalysisStats | None = None) -> pd.DataFrame:
     """Drop the sentences whose structure label is in ``exclude_sentence_types``."""
     if not settings.exclude_sentence_types or "structure" not in sentences:
         return sentences
     drop = sentences["structure"].isin(settings.exclude_sentence_types)
+    own = stats is None
+    stats = stats or AnalysisStats()
     if drop.any():
-        counts = sentences.loc[drop, "structure"].value_counts()
-        log.info("Excluded %d sentence(s) by type: %s", int(drop.sum()),
-                 ", ".join(f"{k} {v}" for k, v in counts.items()))
-        gone = sorted(set(sentences.loc[drop, "document"]) - set(sentences.loc[~drop, "document"]))
-        if gone:
-            log.warning("%d document(s) have no sentences left after the exclusion and are not in the results: %s",
-                        len(gone), ", ".join(gone[:10]) + (" ..." if len(gone) > 10 else ""))
+        stats.excluded.update(sentences.loc[drop, "structure"].value_counts().to_dict())
+        stats.emptied_documents += sorted(set(sentences.loc[drop, "document"]) - set(sentences.loc[~drop, "document"]))
+    if own:
+        stats.report()
     return sentences.loc[~drop].reset_index(drop=True)
 
 
@@ -164,19 +200,26 @@ def analyze_sentences(
     long_segment_words: int = 500,
     show_progress: bool = False,
     check_hierarchy: bool = True,
+    matcher: Matcher | None = None,
+    stats: AnalysisStats | None = None,
 ) -> pd.DataFrame:
     """Code every sentence.
 
     ``sentences`` needs ``document`` and ``text`` columns, ``vader_compound`` when the
-    framework uses sentiment, and optionally ``sentence_id``/``start``/``end``, which
-    are carried through.
+    framework uses sentiment, and optionally ``sentence_id``/``structure``/``start``/``end``,
+    which are carried through. The rows of a document must be consecutive and complete:
+    DOC, DOC_SHARE and WINDOW look at the whole document. A batch of whole documents can
+    therefore be analyzed on its own. Pass ``matcher`` to reuse one between batches, and
+    ``stats`` to collect warnings over batches instead of logging them here.
     """
+    own_stats = stats is None
+    stats = stats if stats is not None else AnalysisStats()
     sentences = sentences.reset_index(drop=True)
     text = [normalize_text(t).lower() for t in sentences["text"].fillna("").astype(str)]
     n = len(text)
     ev = Evaluator(fw, text, sentences["document"].to_numpy())
 
-    matcher = Matcher(fw.all_lists)
+    matcher = matcher or Matcher(fw.all_lists)
     needed = {name for lists in fw.set_lists.values() for name in lists}
     progress = None
     if show_progress:
@@ -208,29 +251,22 @@ def analyze_sentences(
         ev.variables[number] = value
 
     if check_hierarchy and not fw.settings.aggregate_children:
-        broken = [(v.number, v.parent, int((ev.variables[v.number] & ~ev.variables[v.parent]).sum()))
-                  for v in fw.variables if v.parent]
-        broken = [b for b in broken if b[2]]
-        if broken:
-            log.warning(
-                "%d child variable(s) are true in sentences where their parent is false (set "
-                "aggregate_children = true to make parents include their children): %s",
-                len(broken), "; ".join(f"{c} vs parent {p}: {k} sentences" for c, p, k in broken[:5]),
-            )
+        for v in fw.variables:
+            if v.parent:
+                stats.hierarchy[(v.number, v.parent)] += int((ev.variables[v.number] & ~ev.variables[v.parent]).sum())
 
     if long_segment_words and n:
+        stats.long_limit = long_segment_words
         lengths = np.fromiter((len(t.split()) for t in text), dtype=int, count=n)
         long_rows = np.flatnonzero(lengths > long_segment_words)
         if len(long_rows):
             ids = sentences["sentence_id"] if "sentence_id" in sentences else pd.Series(np.arange(1, n + 1))
-            examples = ", ".join(f"{sentences['document'].iat[i]} (sentence {ids.iat[i]}, {lengths[i]} words)"
-                                 for i in long_rows[:3])
-            log.warning(
-                "%d segment(s) are longer than %d words, which usually means sentence splitting "
-                "failed (tables, reference lists, text without punctuation). They are slow to "
-                "process and distort per-sentence percentages. First: %s",
-                len(long_rows), long_segment_words, examples,
-            )
+            stats.long_segments += len(long_rows)
+            room = 3 - len(stats.long_examples)
+            stats.long_examples += [f"{sentences['document'].iat[i]} (sentence {ids.iat[i]}, {lengths[i]} words)"
+                                    for i in long_rows[:max(room, 0)]]
+    if own_stats:
+        stats.report()
 
     parts: dict[str, object] = {c: sentences[c].to_numpy()
                                 for c in ("sentence_id", "structure", "start", "end") if c in sentences}

@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .common import DOCUMENTS, RESULTS, SENTENCES, CtrlFindrError, ValidationError, connect, read_table, table_exists
+from .common import DOCUMENTS, RESULTS, SENTENCES, CtrlFindrError, ValidationError, connect, table_exists
 from .config import Config
 from .framework import Framework, load_framework
 
@@ -48,33 +48,42 @@ def _target_column(fw: Framework, target: str) -> str | None:
     return None
 
 
+def _quote(column: str) -> str:
+    return '"' + column.replace('"', '""') + '"'
+
+
 def sample(cfg: Config, n: int = 50, targets: list[str] | None = None, seed: int = 1) -> Path:
-    """Write a blind validation sample (n flagged + n unflagged sentences per target)."""
+    """Write a blind validation sample (n flagged + n unflagged sentences per target).
+
+    Only the needed columns of the results are read, so this works for any corpus size.
+    """
     fw = load_framework(cfg.paths.framework)
     db = cfg.paths.database
     if not db.is_file():
         raise CtrlFindrError(f"database {db} not found; run ingest and analyze first")
-    with connect(db) as conn:
-        if not all(table_exists(conn, t) for t in (RESULTS, SENTENCES, DOCUMENTS)):
-            raise CtrlFindrError("run the analysis first; the sample is drawn from its results")
-        results = read_table(conn, RESULTS)
-        texts = read_table(conn, SENTENCES)[["document", "sentence_id", "text"]]
     targets = targets or [v.number for v in fw.variables]
     rng = np.random.default_rng(seed)
     rows = []
-    for t in targets:
-        col = _target_column(fw, t)
-        if col is None or col not in results:
-            raise CtrlFindrError(f"{t!r} is not a variable number, list or query of the framework")
-        flagged = results.index[results[col].astype(bool)].to_numpy()
-        unflagged = results.index[~results[col].astype(bool)].to_numpy()
-        for pool in (flagged, unflagged):
-            take = rng.choice(pool, size=min(n, len(pool)), replace=False) if len(pool) else []
-            for i in take:
-                rows.append({"document": results.at[i, "document"], "sentence_id": int(results.at[i, "sentence_id"]),
-                             "variable": t})
-    out = pd.DataFrame(rows).merge(texts, on=["document", "sentence_id"], how="left")
-    out = out.rename(columns={"text": "sentence"}).sample(frac=1, random_state=seed).reset_index(drop=True)
+    with connect(db) as conn:
+        if not all(table_exists(conn, t) for t in (RESULTS, SENTENCES, DOCUMENTS)):
+            raise CtrlFindrError("run the analysis first; the sample is drawn from its results")
+        columns = {r[1] for r in conn.execute(f"PRAGMA table_info({RESULTS})")}
+        for t in targets:
+            col = _target_column(fw, t)
+            if col is None or col not in columns:
+                raise CtrlFindrError(f"{t!r} is not a variable number, list or query of the framework")
+            res = pd.read_sql_query(f"SELECT document, sentence_id, {_quote(col)} AS flag FROM {RESULTS} "
+                                    "ORDER BY document, sentence_id", conn)
+            flag = res["flag"].astype(bool).to_numpy()
+            for pool in (np.flatnonzero(flag), np.flatnonzero(~flag)):
+                take = rng.choice(pool, size=min(n, len(pool)), replace=False) if len(pool) else []
+                rows += [{"document": res.at[i, "document"], "sentence_id": int(res.at[i, "sentence_id"]),
+                          "variable": t} for i in take]
+            del res
+        out = pd.DataFrame(rows, columns=["document", "sentence_id", "variable"])
+        out["sentence"] = [conn.execute(f"SELECT text FROM {SENTENCES} WHERE document=? AND sentence_id=?",
+                                        (d, int(i))).fetchone()[0] for d, i in zip(out["document"], out["sentence_id"])]
+    out = out.sample(frac=1, random_state=seed).reset_index(drop=True)
     out["human_code"] = ""
     out["note"] = ""
     path = cfg.paths.output / "validation_sample.tsv"
@@ -89,56 +98,89 @@ def _code(value) -> int | None:
     return 1 if v in ("1", "true", "yes", "y") else 0 if v in ("0", "false", "no", "n") else None
 
 
+class ValidationCollector:
+    """Compares hand codes with the results, batch by batch (see module docstring)."""
+
+    def __init__(self, path: Path, fw: Framework):
+        self.path = path
+        try:
+            coded = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False, encoding="utf-8-sig")
+        except Exception as exc:
+            raise ValidationError("Validation file could not be read", [f"{path}: {exc}"]) from exc
+        missing = {"document", "sentence_id", "variable", "human_code"} - set(coded.columns)
+        if missing:
+            raise ValidationError("Validation file is missing columns", [f"{path.name}: {', '.join(sorted(missing))}"])
+        coded["code"] = coded["human_code"].map(_code)
+        problems = [f"row {i + 2}: human_code {v!r} must be 1 or 0" for i, v in enumerate(coded["human_code"])
+                    if v.strip() and _code(v) is None]
+        if problems:
+            raise ValidationError(f"Validation file {path.name} has invalid codes", problems[:20])
+        coded = coded[coded["code"].notna()].copy()
+        coded["sentence_id"] = pd.to_numeric(coded["sentence_id"], errors="coerce")
+        unknown = sorted({t for t in coded["variable"] if _target_column(fw, t) is None})
+        if unknown:
+            raise ValidationError("Validation file names an unknown variable", [repr(t) for t in unknown])
+        coded["column"] = [_target_column(fw, t) for t in coded["variable"]]
+        if "sentence" not in coded:
+            coded["sentence"] = ""
+        self.coded = coded
+        self.pred: dict[int, bool] = {}  # row of `coded` -> CtrlFindr's value
+        self.flagged = {c: 0 for c in coded["column"].unique()}
+        self.total = 0
+
+    def add(self, results: pd.DataFrame) -> None:
+        self.total += len(results)
+        for c in self.flagged:
+            self.flagged[c] += int(results[c].sum())
+        docs = set(results["document"])
+        mine = self.coded[self.coded["document"].isin(docs)]
+        if mine.empty:
+            return
+        key = results.set_index(["document", "sentence_id"])
+        for row, d, i, c in zip(mine.index, mine["document"], mine["sentence_id"], mine["column"]):
+            if (d, i) in key.index:
+                self.pred[row] = bool(key.at[(d, i), c])
+
+    def finish(self, out_dir: Path) -> dict:
+        """Write validation_report.tsv and validation_disagreements.tsv."""
+        report, disagreements = [], []
+        coded = self.coded.loc[sorted(self.pred)]
+        for target, grp in coded.groupby("variable", sort=False):
+            col = grp["column"].iat[0]
+            pred = np.array([self.pred[r] for r in grp.index])
+            human = grp["code"].to_numpy().astype(int).astype(bool)
+            n_flag, n_unflag = int(pred.sum()), int((~pred).sum())
+            tp, fp = int((pred & human).sum()), int((pred & ~human).sum())
+            fn, tn = int((~pred & human).sum()), int((~pred & ~human).sum())
+            N_flag = self.flagged[col]
+            N_unflag = self.total - N_flag
+            precision = tp / n_flag if n_flag else np.nan
+            tp_est = precision * N_flag if n_flag else np.nan
+            fn_est = (fn / n_unflag) * N_unflag if n_unflag else np.nan
+            recall = tp_est / (tp_est + fn_est) if n_flag and n_unflag and (tp_est + fn_est) > 0 else np.nan
+            f1 = (2 * precision * recall / (precision + recall)
+                  if precision == precision and recall == recall and (precision + recall) > 0 else np.nan)
+            report.append({"variable": target, "column": col, "coded": len(grp), "coded_flagged": n_flag,
+                           "coded_unflagged": n_unflag, "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+                           "corpus_flagged": N_flag, "corpus_unflagged": N_unflag,
+                           "precision": precision, "recall_estimated": recall, "f1": f1})
+            for (_, r), p, h in zip(grp.iterrows(), pred, human):
+                if p != h:
+                    disagreements.append({"variable": target, "document": r["document"],
+                                          "sentence_id": int(r["sentence_id"]), "ctrlfindr": int(p), "human": int(h),
+                                          "sentence": r["sentence"]})
+        rep = pd.DataFrame(report)
+        rep.to_csv(out_dir / "validation_report.tsv", sep="\t", index=False, encoding="utf-8", lineterminator="\n")
+        pd.DataFrame(disagreements, columns=["variable", "document", "sentence_id", "ctrlfindr", "human", "sentence"]
+                     ).to_csv(out_dir / "validation_disagreements.tsv", sep="\t", index=False, encoding="utf-8",
+                              lineterminator="\n")
+        coded_n = int(rep["coded"].sum()) if len(rep) else 0
+        log.info("Validation: %d coded sentences for %d target(s); see validation_report.tsv", coded_n, len(rep))
+        return {"file": str(self.path), "targets": len(rep), "coded_sentences": coded_n}
+
+
 def validation_report(path: Path, results: pd.DataFrame, fw: Framework, out_dir: Path) -> dict:
-    """Compare hand codes with the current results; write report and disagreements."""
-    try:
-        coded = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False, encoding="utf-8-sig")
-    except Exception as exc:
-        raise ValidationError("Validation file could not be read", [f"{path}: {exc}"]) from exc
-    missing = {"document", "sentence_id", "variable", "human_code"} - set(coded.columns)
-    if missing:
-        raise ValidationError("Validation file is missing columns", [f"{path.name}: {', '.join(sorted(missing))}"])
-    coded["code"] = coded["human_code"].map(_code)
-    problems = [f"row {i + 2}: human_code {v!r} must be 1 or 0" for i, v in enumerate(coded["human_code"])
-                if v.strip() and _code(v) is None]
-    if problems:
-        raise ValidationError(f"Validation file {path.name} has invalid codes", problems[:20])
-    coded = coded[coded["code"].notna()].copy()
-    coded["sentence_id"] = pd.to_numeric(coded["sentence_id"], errors="coerce")
-    key = results.set_index(["document", "sentence_id"])
-    report, disagreements = [], []
-    for target, grp in coded.groupby("variable", sort=False):
-        col = _target_column(fw, target)
-        if col is None:
-            raise ValidationError("Validation file names an unknown variable", [f"{target!r}"])
-        idx = list(zip(grp["document"], grp["sentence_id"]))
-        present = [k in key.index for k in idx]
-        grp = grp[present]
-        if not len(grp):
-            continue
-        pred = np.array([bool(key.at[k, col]) for k in zip(grp["document"], grp["sentence_id"])])
-        human = grp["code"].to_numpy().astype(int).astype(bool)
-        n_flag, n_unflag = int(pred.sum()), int((~pred).sum())
-        tp, fp = int((pred & human).sum()), int((pred & ~human).sum())
-        fn, tn = int((~pred & human).sum()), int((~pred & ~human).sum())
-        N_flag = int(results[col].sum())
-        N_unflag = int(len(results) - N_flag)
-        precision = tp / n_flag if n_flag else np.nan
-        tp_est = precision * N_flag if n_flag else np.nan
-        fn_est = (fn / n_unflag) * N_unflag if n_unflag else np.nan
-        recall = tp_est / (tp_est + fn_est) if n_flag and n_unflag and (tp_est + fn_est) > 0 else np.nan
-        f1 = 2 * precision * recall / (precision + recall) if precision == precision and recall == recall and (precision + recall) > 0 else np.nan
-        report.append({"variable": target, "column": col, "coded": len(grp), "coded_flagged": n_flag,
-                       "coded_unflagged": n_unflag, "tp": tp, "fp": fp, "fn": fn, "tn": tn,
-                       "corpus_flagged": N_flag, "corpus_unflagged": N_unflag,
-                       "precision": precision, "recall_estimated": recall, "f1": f1})
-        for (_, r), p, h in zip(grp.iterrows(), pred, human):
-            if p != h:
-                disagreements.append({"variable": target, "document": r["document"], "sentence_id": int(r["sentence_id"]),
-                                      "ctrlfindr": int(p), "human": int(h), "sentence": r.get("sentence", "")})
-    rep = pd.DataFrame(report)
-    rep.to_csv(out_dir / "validation_report.tsv", sep="\t", index=False, encoding="utf-8", lineterminator="\n")
-    pd.DataFrame(disagreements, columns=["variable", "document", "sentence_id", "ctrlfindr", "human", "sentence"]).to_csv(
-        out_dir / "validation_disagreements.tsv", sep="\t", index=False, encoding="utf-8", lineterminator="\n")
-    log.info("Validation: %d coded sentences for %d target(s); see validation_report.tsv", int(rep["coded"].sum()) if len(rep) else 0, len(rep))
-    return {"file": str(path), "targets": len(rep), "coded_sentences": int(rep["coded"].sum()) if len(rep) else 0}
+    """Compare hand codes with a complete results table (one batch)."""
+    collector = ValidationCollector(path, fw)
+    collector.add(results)
+    return collector.finish(out_dir)

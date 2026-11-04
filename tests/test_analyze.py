@@ -142,3 +142,41 @@ def test_sentiment_scores_are_cached(tmp_path, small_fw, monkeypatch):
     ingest.run(cfg, show_progress=False)
     analyze.run(cfg, show_progress=False)
     assert calls == [2, 3]  # second run used the cache; the changed document was rescored
+
+
+def test_batches_never_split_documents():
+    from ctrlfindr.analyze import _batches
+
+    counts = [("a", 3), ("b", 4), ("c", 10), ("d", 1), ("e", 1)]
+    assert _batches(counts, 5) == [("a", "a", 3), ("b", "b", 4), ("c", "c", 10), ("d", "e", 2)]
+    assert _batches(counts, 100) == [("a", "e", 19)]
+    assert _batches(counts, 1) == [(d, d, c) for d, c in counts]
+
+
+def test_stopped_analysis_keeps_previous_outputs(tmp_path, small_fw, monkeypatch):
+    from ctrlfindr import engine
+
+    (tmp_path / "Text_files").mkdir()
+    for i in range(3):
+        (tmp_path / "Text_files" / f"d{i}.txt").write_text("Flood risk rises. Calm.", encoding="utf-8")
+    cfg = config_from_dict({"paths": {"framework": str(small_fw.path)}, "analysis": {"batch_sentences": 2}},
+                           base=tmp_path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    before = {p.name: p.read_bytes() for p in cfg.paths.output.glob("results_*.tsv")}
+    real, calls = engine.analyze_sentences, {"n": 0}
+
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt
+        return real(*a, **k)
+
+    monkeypatch.setattr(analyze, "analyze_sentences", flaky)
+    with pytest.raises(KeyboardInterrupt):
+        analyze.run(cfg, show_progress=False)
+    assert {p.name: p.read_bytes() for p in cfg.paths.output.glob("results_*.tsv")} == before
+    assert not list(cfg.paths.output.glob("*.partial"))
+    with sqlite3.connect(cfg.paths.database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM results_sentences").fetchone()[0] == 6
+        assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name='results_sentences_new'").fetchone()

@@ -11,6 +11,10 @@ Two input types are read from the text files folder:
 Re-running ingest only processes files that are new or changed (by SHA-256) and removes
 documents whose files are gone. Changing the cleaning setting, or upgrading CtrlFindr or
 pySBD, rebuilds everything. Sentiment is not computed here (see ctrlfindr.sentiment).
+
+Each file is saved in its own transaction as soon as it is done, so an ingest that is
+stopped (Ctrl+C, a killed process, a crash) keeps every finished file; running it again
+continues with the files that are left.
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ from .markdown import blocks as markdown_blocks
 log = logging.getLogger("ctrlfindr")
 
 # Bump when cleaning or segmentation logic changes, so existing databases are rebuilt.
-INGEST_REVISION = 5
+INGEST_REVISION = 6
 SUFFIXES = {".txt": "txt", ".md": "md"}
 UNSTRUCTURED = "unstructured"
 STRUCTURE_LABELS = ("header", "body", "list", "table", "footnote", UNSTRUCTURED)
@@ -45,6 +49,10 @@ _BLANK_LINE = re.compile(r"[^\S\n]*\n(?:[^\S\n]*\n)+[^\S\n]*")  # one or more bl
 _LINE_BREAK = re.compile(r"(?<!\n)\n(?!\n)")  # a single line break (not a blank line)
 _SPACES = re.compile(r"[^\S\n]+")  # runs of whitespace other than line breaks
 _CITATION_AFTER_STOP = re.compile(r"(?<=[.!?])(?=\[\d)")  # "2050.[4] The" -> "2050. [4] The"
+# "published.The minister" -> "published. The minister": a full stop (or ? !, possibly with a
+# closing bracket or quote) after two lower-case letters or digits, directly followed by a
+# capitalised word. "U.S.Army", "Ph.D.Later", "St.Louis", "e.g.The" and "4.2.Results" are left alone.
+_MISSING_SPACE = re.compile(r"(?<=[a-z0-9]{2})([)\]\"']?[.!?][)\]\"']?)(?=[A-Z][a-z])")
 
 _SCHEMA = (
     f"""CREATE TABLE IF NOT EXISTS {DOCUMENTS} (
@@ -104,7 +112,7 @@ def decode(data: bytes, errors: str) -> str:
     return data.decode("utf-8-sig", errors=errors)
 
 
-def clean_document(raw: str, text_cleaning: bool = True) -> str:
+def clean_document(raw: str, text_cleaning: bool = True, repair_spacing: bool = False) -> str:
     """Normalize plain text. Sentence offsets refer to the string returned here.
 
     Always: NFKC normalization and dash/quote folding; blank lines become ``\\n\\n``, where a
@@ -112,12 +120,16 @@ def clean_document(raw: str, text_cleaning: bool = True) -> str:
     one space; a space is inserted between a full stop and a following citation mark
     (``2050.[4] The``), which the sentence splitter would otherwise not split.
     With ``text_cleaning``: URLs are removed and ``..``/``...`` become ``.``.
+    With ``repair_spacing`` (used for .txt files): a missing space after a full stop is
+    added (``published.The minister`` -> ``published. The minister``).
     """
     text = normalize_text(raw).replace("\r\n", "\n").replace("\r", "\n")
     if text_cleaning:
         text = _URL.sub("", text)
         text = _ELLIPSIS.sub(".", text)
     text = _CITATION_AFTER_STOP.sub(" ", text)
+    if repair_spacing:
+        text = _MISSING_SPACE.sub(r"\1 ", text)
     text = _BLANK_LINE.sub("\n\n", text)
     text = _LINE_BREAK.sub(" ", text)
     text = _SPACES.sub(" ", text)
@@ -131,7 +143,7 @@ def prepare(raw: str, fmt: str, text_cleaning: bool = True) -> tuple[str, list[s
     item, table row and body paragraph is one block, with the Markdown syntax removed.
     """
     if fmt == "txt":
-        text = clean_document(raw, text_cleaning)
+        text = clean_document(raw, text_cleaning, repair_spacing=True)
         return text, [UNSTRUCTURED] * (text.count("\n\n") + 1)
     parts, labels = [], []
     for label, block in markdown_blocks(raw):
@@ -258,15 +270,22 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
                         len(bad), "; ".join(bad[:5]) + (" ..." if len(bad) > 5 else ""))
 
         cached_sentiment = _table_exists(conn, SENTIMENT)
-        for d in removed + todo:
+
+        def forget(d: str) -> None:
             conn.execute(f"DELETE FROM {SENTENCES} WHERE document=?", (d,))
             conn.execute(f"DELETE FROM {DOCUMENTS} WHERE document=?", (d,))
             if cached_sentiment:  # scores of changed documents no longer match their sentences
                 conn.execute(f"DELETE FROM {SENTIMENT} WHERE document=?", (d,))
+
+        for d in removed:
+            forget(d)
         for d, f in files.items():  # files may have moved; keep paths current
             conn.execute(f"UPDATE {DOCUMENTS} SET path=? WHERE document=?", (str(f.path), d))
+        conn.commit()  # settings check, removals and paths are saved before the long part
+        if todo:
+            log.info("Ingest: %d file(s) to process, %d unchanged", len(todo), len(files) - len(todo))
 
-        n_sent = 0
+        n_sent = done = 0
         if todo:
             segmenter = Segmenter()
             iterator = todo
@@ -275,25 +294,36 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
 
                 iterator = tqdm(todo, desc="ingest", unit=" files", leave=False)
             empty = []
-            for d in iterator:
-                f = files[d]
-                data = f.path.read_bytes()
-                digest = hashlib.sha256(data).hexdigest()  # the bytes actually ingested
-                text, labels = prepare(decode(data, errors), f.format, cfg.ingest.text_cleaning)
-                del data
-                sents = segmenter.split(text, labels)
-                if not sents:
-                    empty.append(f.path.name)
-                conn.execute(
-                    f"INSERT INTO {DOCUMENTS} (document, path, format, sha256, clean_text) VALUES (?, ?, ?, ?, ?)",
-                    (d, str(f.path), f.format, digest, text),
-                )
-                conn.executemany(
-                    f'INSERT INTO {SENTENCES} (document, sentence_id, structure, start, "end", text) '
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    [(d, s.sentence_id, s.structure, s.start, s.end, s.text) for s in sents],
-                )
-                n_sent += len(sents)
+            try:
+                for d in iterator:
+                    f = files[d]
+                    data = f.path.read_bytes()
+                    digest = hashlib.sha256(data).hexdigest()  # the bytes actually ingested
+                    text, labels = prepare(decode(data, errors), f.format, cfg.ingest.text_cleaning)
+                    del data
+                    sents = segmenter.split(text, labels)
+                    if not sents:
+                        empty.append(f.path.name)
+                    # One transaction per file: until it is committed, the previous version of
+                    # the document (if any) stays in place, so a stop never leaves half a file.
+                    forget(d)
+                    conn.execute(
+                        f"INSERT INTO {DOCUMENTS} (document, path, format, sha256, clean_text) VALUES (?, ?, ?, ?, ?)",
+                        (d, str(f.path), f.format, digest, text),
+                    )
+                    conn.executemany(
+                        f'INSERT INTO {SENTENCES} (document, sentence_id, structure, start, "end", text) '
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        [(d, s.sentence_id, s.structure, s.start, s.end, s.text) for s in sents],
+                    )
+                    conn.commit()
+                    done += 1
+                    n_sent += len(sents)
+            except KeyboardInterrupt:
+                conn.rollback()
+                log.warning("Ingest stopped after %d of %d file(s). The finished files are saved; run ingest "
+                            "again to continue with the %d file(s) left.", done, len(todo), len(todo) - done)
+                raise
             if empty:
                 log.warning("%d file(s) contain no sentences and will not appear in the results: %s",
                             len(empty), ", ".join(empty))

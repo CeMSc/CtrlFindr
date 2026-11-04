@@ -61,7 +61,7 @@ Notes:
 
 ### Sentence splitting and cleaning
 
-The example corpus goes from 1,589 to 1,692 sentences (+6.5%), for these reasons:
+The example corpus goes from 1,589 to 1,695 sentences (+6.7%), for these reasons:
 
 - **Line breaks.** 2.1 deleted line breaks that were followed by a capital letter or digit,
   which glued words together (`securityclimate`, `historyhuman`, `definitionclimate`, ...).
@@ -72,6 +72,10 @@ The example corpus goes from 1,589 to 1,692 sentences (+6.5%), for these reasons
 - **Splitter.** pySBD replaces NLTK punkt. Its boundaries differ in places (abbreviations,
   decimals). pySBD does not split `2050.[4] The`, so 3.0 inserts a space between a full stop
   and a following citation mark before splitting.
+- **Missing spaces.** In `.txt` files, a missing space after a full stop is repaired
+  ("Cold War era.The broadening…" → two sentences). This happens 3 times in
+  `wikiClimate_security`, which goes from 249 to 252 sentences and gains one sentence each
+  for "1. climate change" and "1.2 slow climate onset".
 - **Junk segments.** Segments without any letter are dropped. This keeps 2.1's rule (numbers
   or punctuation only) and adds citation marks such as `[12]` or `[3][4]`, which pySBD splits
   off as separate segments.
@@ -84,7 +88,7 @@ counts rise.
 | change | effect on the example corpus |
 |---|---|
 | vaderSentiment (the VADER authors' reference implementation) instead of NLTK's port | 57 of 1,589 scores differ on the same lowercased sentences; 13 change sign. The differences are mostly in sentences with "but" or negations, which the two implementations weight differently. |
-| VADER scores the original-case sentence instead of the lowercased one | 3 of 1,692 scores differ (VADER boosts words in capitals) |
+| VADER scores the original-case sentence instead of the lowercased one | 3 of about 1,700 scores differ (VADER boosts words in capitals) |
 | thresholds ±0.05 instead of 0 | on the 3.0 scores: positive 687 → 678, negative 494 → 483, neutral 511 → 531 |
 
 The `vadar_compound` column is renamed `vader_compound`.
@@ -100,9 +104,9 @@ name, they locate each sentence in `documents.clean_text` in `analysis.sqlite`
 Generated with `python tools/compare_outputs.py tests/fixtures/golden_v2.1 tests/fixtures/golden_v3 --rename vadar_compound=vader_compound`.
 
 #### results_document.tsv
-- `1. climate change` (5 of 7 documents): wiki2023_United_Nations_Climate_Change_Conference: 84 → 86; wikiAnthropocene: 51 → 53; wikiClimate_change: 324 → 338; wikiClimate_justice: 115 → 120; wikiClimate_security: 161 → 165
+- `1. climate change` (5 of 7 documents): wiki2023_United_Nations_Climate_Change_Conference: 84 → 86; wikiAnthropocene: 51 → 53; wikiClimate_change: 324 → 338; wikiClimate_justice: 115 → 120; wikiClimate_security: 161 → 166
 - `1.1 fast climate onset` (3 of 7 documents): examplefile: 1 → 0; wikiClimate_change: 32 → 31; wikiClimate_justice: 6 → 5
-- `1.2 slow climate onset` (6 of 7 documents): examplefile: 4 → 5; wiki2023_United_Nations_Climate_Change_Conference: 83 → 85; wikiAnthropocene: 51 → 53; wikiClimate_change: 292 → 307; wikiClimate_justice: 109 → 115; wikiClimate_security: 158 → 162
+- `1.2 slow climate onset` (6 of 7 documents): examplefile: 4 → 5; wiki2023_United_Nations_Climate_Change_Conference: 83 → 85; wikiAnthropocene: 51 → 53; wikiClimate_change: 292 → 307; wikiClimate_justice: 109 → 115; wikiClimate_security: 158 → 163
 - `2.1 human-wildlife conflict and fast climate onset` (1 of 7 documents): examplefile: 1 → 0
 - `2.1.2 human-wildlife conflict and fast climate onsets in articles that mention ipcc` (1 of 7 documents): examplefile: 1 → 0
 - `2.2 human-wildlife conflict and slow climate onsets` (1 of 7 documents): examplefile: 1 → 2
@@ -116,9 +120,9 @@ Generated with `python tools/compare_outputs.py tests/fixtures/golden_v2.1 tests
 - `4. increase of adaptive capacity` (1 of 7 documents): wiki2023_United_Nations_Climate_Change_Conference: 0 → 1
 
 #### results_document_percentage_of_sentences.tsv
-- `1. climate change` (6 of 7 documents): wiki2023_United_Nations_Climate_Change_Conference: 37.33 → 35.98; wikiAnthropocene: 20.82 → 20.78; wikiClimate_change: 57.24 → 56.71; wikiClimate_justice: 60.21 → 57.14; wikiClimate_security: 70 → 66.27; wikiHuman-wildlife_conflict: 1.667 → 1.527
-- `1.1 fast climate onset` (6 of 7 documents): examplefile: 8.333 → 0; wiki2023_United_Nations_Climate_Change_Conference: 0.4444 → 0.4184; wikiClimate_change: 5.654 → 5.201; wikiClimate_justice: 3.141 → 2.381; wikiClimate_security: 1.304 → 1.205; wikiHuman-wildlife_conflict: 0.8333 → 0.7634
-- `1.2 slow climate onset` (7 of 7 documents): examplefile: 33.33 → 41.67; wiki2023_United_Nations_Climate_Change_Conference: 36.89 → 35.56; wikiAnthropocene: 20.82 → 20.78; wikiClimate_change: 51.59 → 51.51; wikiClimate_justice: 57.07 → 54.76; wikiClimate_security: 68.7 → 65.06; wikiHuman-wildlife_conflict: 0.8333 → 0.7634
+- `1. climate change` (6 of 7 documents): wiki2023_United_Nations_Climate_Change_Conference: 37.33 → 35.98; wikiAnthropocene: 20.82 → 20.78; wikiClimate_change: 57.24 → 56.71; wikiClimate_justice: 60.21 → 57.14; wikiClimate_security: 70 → 65.87; wikiHuman-wildlife_conflict: 1.667 → 1.527
+- `1.1 fast climate onset` (6 of 7 documents): examplefile: 8.333 → 0; wiki2023_United_Nations_Climate_Change_Conference: 0.4444 → 0.4184; wikiClimate_change: 5.654 → 5.201; wikiClimate_justice: 3.141 → 2.381; wikiClimate_security: 1.304 → 1.19; wikiHuman-wildlife_conflict: 0.8333 → 0.7634
+- `1.2 slow climate onset` (7 of 7 documents): examplefile: 33.33 → 41.67; wiki2023_United_Nations_Climate_Change_Conference: 36.89 → 35.56; wikiAnthropocene: 20.82 → 20.78; wikiClimate_change: 51.59 → 51.51; wikiClimate_justice: 57.07 → 54.76; wikiClimate_security: 68.7 → 64.68; wikiHuman-wildlife_conflict: 0.8333 → 0.7634
 - `2. climate change and human wild life conflict` (3 of 7 documents): wikiAnthropocene: 0.8163 → 0.7843; wikiClimate_change: 1.237 → 1.174; wikiClimate_justice: 0.5236 → 0.4762
 - `2.1 human-wildlife conflict and fast climate onset` (1 of 7 documents): examplefile: 8.333 → 0
 - `2.1.2 human-wildlife conflict and fast climate onsets in articles that mention ipcc` (1 of 7 documents): examplefile: 8.333 → 0
@@ -127,9 +131,9 @@ Generated with `python tools/compare_outputs.py tests/fixtures/golden_v2.1 tests
 - `4. increase of adaptive capacity` (2 of 7 documents): wiki2023_United_Nations_Climate_Change_Conference: 0 → 0.4184; wikiClimate_change: 0.1767 → 0.1678
 
 #### results_document_sentiment.tsv
-- `1. climate change` (5 of 7 documents): wiki2023_United_Nations_Climate_Change_Conference: 0.1162 → 0.1207; wikiAnthropocene: -0.06166 → -0.055; wikiClimate_change: 0.07591 → 0.07456; wikiClimate_justice: 0.1178 → 0.1145; wikiClimate_security: 0.04519 → 0.03584
+- `1. climate change` (5 of 7 documents): wiki2023_United_Nations_Climate_Change_Conference: 0.1162 → 0.1207; wikiAnthropocene: -0.06166 → -0.055; wikiClimate_change: 0.07591 → 0.07456; wikiClimate_justice: 0.1178 → 0.1145; wikiClimate_security: 0.04519 → 0.0316
 - `1.1 fast climate onset` (3 of 7 documents): examplefile: 0.2732 → nan; wikiClimate_change: 0.06157 → 0.06166; wikiClimate_justice: -0.3558 → -0.4816
-- `1.2 slow climate onset` (6 of 7 documents): examplefile: 0 → 0.05464; wiki2023_United_Nations_Climate_Change_Conference: 0.1103 → 0.1151; wikiAnthropocene: -0.06166 → -0.055; wikiClimate_change: 0.07748 → 0.07586; wikiClimate_justice: 0.1439 → 0.1405; wikiClimate_security: 0.05724 → 0.04742
+- `1.2 slow climate onset` (6 of 7 documents): examplefile: 0 → 0.05464; wiki2023_United_Nations_Climate_Change_Conference: 0.1103 → 0.1151; wikiAnthropocene: -0.06166 → -0.055; wikiClimate_change: 0.07748 → 0.07586; wikiClimate_justice: 0.1439 → 0.1405; wikiClimate_security: 0.05724 → 0.04303
 - `2.1 human-wildlife conflict and fast climate onset` (1 of 7 documents): examplefile: 0.2732 → nan
 - `2.1.2 human-wildlife conflict and fast climate onsets in articles that mention ipcc` (1 of 7 documents): examplefile: 0.2732 → nan
 - `2.2 human-wildlife conflict and slow climate onsets` (1 of 7 documents): examplefile: -0.3182 → -0.0225
@@ -137,7 +141,7 @@ Generated with `python tools/compare_outputs.py tests/fixtures/golden_v2.1 tests
 - `4. increase of adaptive capacity` (1 of 7 documents): wiki2023_United_Nations_Climate_Change_Conference: nan → 0.9013
 
 #### results_sentences.tsv
-- sentences: 1589 → 1692
+- sentences: 1589 → 1695
 
 | document | old sentences | new sentences |
 |---|---:|---:|
@@ -146,20 +150,20 @@ Generated with `python tools/compare_outputs.py tests/fixtures/golden_v2.1 tests
 | wikiAnthropocene | 245 | 255 |
 | wikiClimate_change | 566 | 596 |
 | wikiClimate_justice | 191 | 210 |
-| wikiClimate_security | 230 | 249 |
+| wikiClimate_security | 230 | 252 |
 | wikiHuman-wildlife_conflict | 120 | 131 |
 
 | column | old: sentences True | new: sentences True | change |
 |---|---:|---:|---:|
 | `fast` | 94 | 95 | +1 |
-| `slow` | 671 | 699 | +28 |
+| `slow` | 671 | 700 | +29 |
 | `exclude_climate` | 0 | 0 | +0 |
 | `slow1` | 191 | 193 | +2 |
-| `slow2` | 723 | 746 | +23 |
+| `slow2` | 723 | 747 | +24 |
 | `hwc` | 28 | 55 | +27 |
 | `exclude_conflict` | 40 | 41 | +1 |
 | `hwc1` | 150 | 151 | +1 |
-| `compete2` | 162 | 160 | -2 |
+| `compete2` | 162 | 161 | -1 |
 | `resource1` | 221 | 224 | +3 |
 | `competition2` | 117 | 118 | +1 |
 | `ipcc` | 16 | 16 | +0 |
@@ -171,23 +175,23 @@ Generated with `python tools/compare_outputs.py tests/fixtures/golden_v2.1 tests
 | `co_resourceandcompetition` | 11 | 13 | +2 |
 | `co_increasecapacity` | 3 | 4 | +1 |
 | `co_decreasecapacity` | 1 | 1 | +0 |
-| `doc_ipcc` | 1244 | 1322 | +78 |
-| `sentiment_positive` | 678 | 678 | +0 |
-| `sentiment_neutral` | 432 | 531 | +99 |
-| `sentiment_neutralpositive` | 1110 | 1209 | +99 |
-| `sentiment_negative` | 479 | 483 | +4 |
-| `sentiment_neutralnegative` | 911 | 1014 | +103 |
+| `doc_ipcc` | 1244 | 1325 | +81 |
+| `sentiment_positive` | 678 | 679 | +1 |
+| `sentiment_neutral` | 432 | 532 | +100 |
+| `sentiment_neutralpositive` | 1110 | 1211 | +101 |
+| `sentiment_negative` | 479 | 484 | +5 |
+| `sentiment_neutralnegative` | 911 | 1016 | +105 |
 | `a1` | 44 | 41 | -3 |
-| `a2` | 698 | 728 | +30 |
+| `a2` | 698 | 729 | +31 |
 | `b1` | 0 | 0 | +0 |
 | `b2` | 1 | 0 | -1 |
 | `b3` | 11 | 12 | +1 |
 | `c1` | 4 | 5 | +1 |
 | `d1` | 2 | 3 | +1 |
 | `d2` | 1 | 1 | +0 |
-| `1. climate change` | 742 | 769 | +27 |
+| `1. climate change` | 742 | 770 | +28 |
 | `1.1 fast climate onset` | 44 | 41 | -3 |
-| `1.2 slow climate onset` | 698 | 728 | +30 |
+| `1.2 slow climate onset` | 698 | 729 | +31 |
 | `2. climate change and human wild life conflict` | 12 | 12 | +0 |
 | `2.1 human-wildlife conflict and fast climate onset` | 1 | 0 | -1 |
 | `2.1.1 human-wildlife conflict and fast climate onsets in articles that do mention ipcc` | 0 | 0 | +0 |

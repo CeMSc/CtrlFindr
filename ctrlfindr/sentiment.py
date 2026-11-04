@@ -49,8 +49,13 @@ def score_texts(texts) -> list[float]:
     return [sia.polarity_scores(t)["compound"] for t in texts]
 
 
-def cached_scores(conn: sqlite3.Connection, sentences: pd.DataFrame) -> np.ndarray:
-    """Compound scores for ``sentences`` (document, sentence_id, text), using and filling the cache."""
+def cached_scores(conn: sqlite3.Connection, sentences: pd.DataFrame) -> tuple[np.ndarray, int]:
+    """Compound scores for ``sentences`` (document, sentence_id, text), using and filling the cache.
+
+    Only the cached scores of the documents in ``sentences`` are read, so this can be called
+    batch by batch. New scores are written, but not committed: the caller commits.
+    Returns the scores and the number of sentences that had to be scored.
+    """
     _analyzer()  # fail early with a clear message
     conn.execute(f"CREATE TABLE IF NOT EXISTS {SENTIMENT} (document TEXT NOT NULL, sentence_id INTEGER NOT NULL, "
                  "vader_compound REAL NOT NULL, PRIMARY KEY (document, sentence_id))")
@@ -59,15 +64,19 @@ def cached_scores(conn: sqlite3.Connection, sentences: pd.DataFrame) -> np.ndarr
     if row is None or row[0] != version():
         conn.execute(f"DELETE FROM {SENTIMENT}")  # scores from another vaderSentiment version
         conn.execute(f"INSERT OR REPLACE INTO {META} (key, value) VALUES ('sentiment_version', ?)", (version(),))
-    cache = pd.read_sql_query(f"SELECT document, sentence_id, vader_compound FROM {SENTIMENT}", conn)
+    if sentences.empty:
+        return np.zeros(0), 0
+    first, last = sentences["document"].min(), sentences["document"].max()
+    cache = pd.read_sql_query(f"SELECT document, sentence_id, vader_compound FROM {SENTIMENT} "
+                              "WHERE document BETWEEN ? AND ?", conn, params=(first, last))
     merged = sentences[["document", "sentence_id", "text"]].merge(cache, on=["document", "sentence_id"], how="left")
     missing = merged["vader_compound"].isna().to_numpy()
     if missing.any():
-        log.info("Scoring sentiment of %d sentence(s) with VADER", int(missing.sum()))
+        log.debug("Scoring sentiment of %d sentence(s) with VADER", int(missing.sum()))
         new = score_texts(merged.loc[missing, "text"].tolist())
         merged.loc[missing, "vader_compound"] = new
         conn.executemany(
             f"INSERT OR REPLACE INTO {SENTIMENT} (document, sentence_id, vader_compound) VALUES (?, ?, ?)",
             list(zip(merged.loc[missing, "document"], merged.loc[missing, "sentence_id"].astype(int), new)),
         )
-    return merged["vader_compound"].to_numpy(float)
+    return merged["vader_compound"].to_numpy(float), int(missing.sum())

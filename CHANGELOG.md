@@ -83,6 +83,15 @@ effect of each change on the example project is quantified in
   - the original-case sentence is scored, not the lowercased one;
   - the thresholds are ±0.05 instead of 0, and can be changed in the framework's settings.
 
+### Running large corpora
+
+- **Ingest saves each file as soon as it is done.** A stopped or crashed ingest keeps every
+  finished file, and the next run continues with the rest.
+- **The analysis runs in batches of whole documents** (`[analysis] batch_sentences`), so
+  memory use stays flat. Outputs are replaced only when a run completes, and sentiment
+  scores are kept across stops.
+- **`.txt` cleaning repairs a missing space after a full stop** ("published.The minister").
+
 ### Changes to inputs and outputs
 
 - `vadar_compound` is renamed `vader_compound`.

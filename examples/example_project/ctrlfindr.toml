@@ -14,6 +14,9 @@ text_cleaning      = true      # remove URLs; turn ".." and "..." into "."
 encoding_errors    = "strict"  # "strict": stop on files that are not UTF-8; "replace": substitute bad bytes
 long_segment_words = 500       # warn about "sentences" longer than this many words
 
+[analysis]
+batch_sentences    = 50000     # sentences analyzed at a time (whole documents); lower it to use less memory
+
 [export]
 sentence_level = true          # results_sentences.tsv
 document_level = true          # the four results_document*.tsv files

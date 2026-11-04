@@ -99,10 +99,11 @@ def test_example_framework_tests_pass():
     assert len(fw.tests) >= 5 and run_tests(fw) == []
 
 
-def test_end_to_end_example_matches_golden_v3(tmp_path):
+@pytest.mark.parametrize("batch", [50000, 1])  # one document per batch must give the same results
+def test_end_to_end_example_matches_golden_v3(tmp_path, batch):
     shutil.copytree(EXAMPLE / "Text_files", tmp_path / "Text_files")
     shutil.copytree(EXAMPLE / "Input", tmp_path / "Input")
-    cfg = config_from_dict({}, base=tmp_path)
+    cfg = config_from_dict({"analysis": {"batch_sentences": batch}}, base=tmp_path)
     ingest.run(cfg, show_progress=False)
     analyze.run(cfg, show_progress=False)
     for name in OUTPUT_FILES:

@@ -33,6 +33,11 @@ class IngestSettings:
 
 
 @dataclass
+class AnalysisSettings:
+    batch_sentences: int = 50000  # sentences per batch (whole documents); lower it to use less memory
+
+
+@dataclass
 class ExportSettings:
     sentence_level: bool = True
     document_level: bool = True
@@ -42,6 +47,7 @@ class ExportSettings:
 class Config:
     paths: Paths = field(default_factory=Paths)
     ingest: IngestSettings = field(default_factory=IngestSettings)
+    analysis: AnalysisSettings = field(default_factory=AnalysisSettings)
     export: ExportSettings = field(default_factory=ExportSettings)
     source: Path | None = None  # the config file, if loaded from one
 
@@ -52,7 +58,7 @@ class Config:
         return d
 
 
-_SECTIONS = {"paths": Paths, "ingest": IngestSettings, "export": ExportSettings}
+_SECTIONS = {"paths": Paths, "ingest": IngestSettings, "analysis": AnalysisSettings, "export": ExportSettings}
 
 
 def _build(raw: dict[str, Any], base: Path, problems: list[str]) -> Config:
@@ -96,6 +102,8 @@ def _build(raw: dict[str, Any], base: Path, problems: list[str]) -> Config:
         p = getattr(cfg.paths, key)
         if not p.is_absolute():
             setattr(cfg.paths, key, (base / p).resolve())
+    if cfg.analysis.batch_sentences < 1:
+        problems.append("[analysis] batch_sentences must be at least 1")
     if cfg.ingest.encoding_errors not in ("strict", "replace"):
         problems.append('[ingest] encoding_errors must be "strict" or "replace"')
     return cfg
