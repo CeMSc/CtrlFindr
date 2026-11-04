@@ -1,0 +1,6 @@
+document	1. Availability	1.1 Production and supply	1.2 Falling or disrupted production	2. Access	2.1 Price pressure	2.2 Market access	2.3 Price pressure with negative tone	3. Utilization	3.1 Nutrition, water and health	3.2 Diverse or repeated nutrition terms	4. Stability	4.1 Shocks and seasonality	4.2 Shocks in shock-heavy documents	5. Food security (any dimension)	6. Nutrition focus in IPC documents	7. Calm reporting	8. Prices without shocks
+drought_report	-0.100475	-0.100475	0.0	0.0	0.0			0.0	0.0		0.0	0.0	0.0	-0.05741428571428571		-0.08038	0.0
+market_prices				0.205675	0.2732	0.34735					0.2732			0.205675		0.196925	0.2732
+notes				0.0		0.0								0.0		0.0	
+nutrition_brief	0.0	0.0						0.07867777777777778	0.07867777777777778	0.042899999999999994	0.0			0.07081	0.05446923076923076	0.07081	0.0
+stability_outlook	-0.296	-0.296		0.0	0.0						-0.24846	0.0	-0.41409999999999997	-0.25638333333333335		-0.37263333333333337	0.0

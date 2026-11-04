@@ -1,0 +1,2 @@
+# Sample corpus files test byte-level cases (BOM, CRLF, binary): keep them exactly as committed
+examples/food_security_project/Text_files/* -text

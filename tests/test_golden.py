@@ -123,3 +123,23 @@ def test_markdown_example(tmp_path):
     res = pd.read_csv(cfg.paths.output / "results_sentences.tsv", sep="\t")
     assert set(res["structure"]) == {"body", "list"}  # headers and table rows excluded by the framework
     assert len(res) == 14 and res["1. Drought-related conflict"].sum() >= 2
+
+
+def test_food_security_sample_project(tmp_path):
+    """The sample project in examples/food_security_project reproduces its expected outputs."""
+    from conftest import ROOT as root
+    from ctrlfindr.engine import run_tests
+
+    src = root / "examples" / "food_security_project"
+    shutil.copytree(src / "Text_files", tmp_path / "Text_files")
+    shutil.copytree(src / "Input", tmp_path / "Input")
+    for name in ("Assessment_framework.xlsx", "Assessment_framework.ods"):
+        fw = load_framework(tmp_path / "Input" / name)
+        assert len(fw.tests) == 29 and run_tests(fw) == []
+    cfg = config_from_dict({"paths": {"framework": "Input/Assessment_framework.xlsx"}}, base=tmp_path)
+    summary = ingest.run(cfg, show_progress=False)
+    assert (summary["files"], summary["sentences"]) == (6, 44)  # ._notes.txt skipped, empty.txt has none
+    analyze.run(cfg, show_progress=False)
+    for name in OUTPUT_FILES:
+        new = pd.read_csv(cfg.paths.output / f"{name}.tsv", sep="\t")
+        assert_frames_equal(new, pd.read_csv(src / "expected" / f"{name}.tsv", sep="\t"), name)
