@@ -1,0 +1,182 @@
+import json
+import logging
+import sqlite3
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from ctrlfindr import analyze, config_from_dict, ingest
+from ctrlfindr.common import CtrlFindrError, ValidationError
+from ctrlfindr.engine import analyze_sentences
+from ctrlfindr.framework import load_framework
+from fwutil import make_framework
+
+TAX = [("risk", "risk*"), ("flood", "flood*"), ("ipcc", "ipcc")]
+QUERIES = [("q1", "NEAR(risk, flood, 2)"), ("q2", "q1 AND DOC(ipcc)"), ("q3", "flood AND sentiment_negative")]
+VARIABLES = [("1", "Risk", "q1"), ("1.1", "IPCC risk", "q2"), ("2", "Bad floods", "q3")]
+
+
+@pytest.fixture
+def small_fw(tmp_path):
+    return load_framework(make_framework(tmp_path / "fw.ods", TAX, QUERIES, VARIABLES))
+
+
+def project(tmp_path, fw_path, text="Flood risk rises. The IPCC agrees.", **cfg):
+    (tmp_path / "Text_files").mkdir(exist_ok=True)
+    (tmp_path / "Text_files" / "d1.txt").write_text(text, encoding="utf-8")
+    return config_from_dict({"paths": {"framework": str(fw_path)}, **cfg}, base=tmp_path)
+
+
+def test_document_tables(small_fw):
+    sents = pd.DataFrame({
+        "document": ["d1", "d1", "d2", "d2"],
+        "text": ["Flood risk rises.", "The IPCC agrees.", "Risk of terrible flooding.", "Calm day."],
+        "vader_compound": [0.2, 0.0, -0.6, 0.3],
+    })
+    res = analyze_sentences(sents, small_fw)
+    docs = analyze.document_outputs(res, small_fw)
+    rd = docs["results_document"].set_index("document")
+    assert rd.loc["d1"].tolist() == [1, 1, 0] and rd.loc["d2"].tolist() == [1, 0, 1]
+    assert docs["results_document_percentage_of_sentences"].set_index("document").loc["d1", "1. Risk"] == 50.0
+    sent = docs["results_document_sentiment"].set_index("document")
+    assert sent.loc["d2", "2. Bad floods"] == -0.6
+    assert np.isnan(sent.loc["d1", "2. Bad floods"])  # never fired in d1 -> empty cell
+
+
+def test_run_writes_outputs_and_keeps_source_tables(tmp_path, small_fw):
+    cfg = project(tmp_path, small_fw.path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)  # a second run still finds its input
+    with sqlite3.connect(cfg.paths.database) as conn:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"documents", "sentences", "results_sentences"} <= tables
+    out = cfg.paths.output
+    assert b"\r\n" not in (out / "results_document.tsv").read_bytes()
+    assert "## Variables" in (out / "codebook.md").read_text(encoding="utf-8")
+    meta = json.loads((out / "run_metadata.json").read_text(encoding="utf-8"))
+    assert meta["framework"]["settings"]["sentiment_positive_threshold"] == 0.05
+    assert meta["framework"]["meta"]["format_version"] == "1"
+
+
+def test_run_requires_ingest(tmp_path, small_fw):
+    cfg = config_from_dict({"paths": {"framework": str(small_fw.path)}}, base=tmp_path)
+    with pytest.raises(CtrlFindrError, match="run the ingest step first"):
+        analyze.run(cfg, show_progress=False)
+
+
+def test_outputs_of_earlier_runs_are_removed(tmp_path, small_fw):
+    cfg = project(tmp_path, small_fw.path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    cfg.export.sentence_level = False
+    analyze.run(cfg, show_progress=False)
+    assert not (cfg.paths.output / "results_sentences.tsv").exists()
+    assert (cfg.paths.output / "results_document.tsv").is_file()
+
+
+def test_failing_framework_tests_stop_or_warn(tmp_path, caplog):
+    tests = [("Floods are wonderful, great and lovely.", "q3", "")]  # q3 needs negative sentiment: fails
+    path = make_framework(tmp_path / "fw.ods", TAX, QUERIES, VARIABLES, tests=tests)
+    cfg = project(tmp_path, path)
+    ingest.run(cfg, show_progress=False)
+    with pytest.raises(ValidationError, match="framework test"):
+        analyze.run(cfg, show_progress=False)
+    path = make_framework(tmp_path / "fw2.ods", TAX, QUERIES, VARIABLES, tests=tests, settings={"tests_must_pass": False})
+    cfg.paths.framework = path
+    with caplog.at_level(logging.WARNING, logger="ctrlfindr"):
+        analyze.run(cfg, show_progress=False)
+    assert "expected q3 to be true" in caplog.text
+
+
+def test_long_segments_are_reported(small_fw, caplog):
+    sents = pd.DataFrame({"document": ["d"], "text": ["word " * 600], "vader_compound": [0.0]})
+    with caplog.at_level(logging.WARNING, logger="ctrlfindr"):
+        analyze_sentences(sents, small_fw, long_segment_words=500)
+    assert "longer than 500 words" in caplog.text
+
+
+def test_config_has_no_sentiment_section(tmp_path):
+    with pytest.raises(ValidationError, match="framework's settings sheet"):
+        config_from_dict({"sentiment": {"enabled": True}}, base=tmp_path)
+
+
+def test_exclusion_changes_denominators(tmp_path):
+    path = make_framework(tmp_path / "fw.ods", TAX, QUERIES, VARIABLES, settings={"exclude_sentence_types": "header"})
+    (tmp_path / "Text_files").mkdir()
+    (tmp_path / "Text_files" / "d1.md").write_text("# Flood risk\n\nFlood risk rises. Calm.", encoding="utf-8")
+    cfg = config_from_dict({"paths": {"framework": str(path)}}, base=tmp_path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    res = pd.read_csv(cfg.paths.output / "results_sentences.tsv", sep="\t")
+    assert res["structure"].tolist() == ["body", "body"]  # the heading is gone
+    pct = pd.read_csv(cfg.paths.output / "results_document_percentage_of_sentences.tsv", sep="\t")
+    assert pct.loc[0, "1. Risk"] == 50.0  # 1 of 2 remaining sentences
+
+
+def test_sentiment_off_needs_no_vader(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "vaderSentiment", None)  # importing it would fail
+    path = make_framework(tmp_path / "fw.ods", TAX, [("q1", "NEAR(risk, flood, 2)")], [("1", "Risk", "q1")],
+                          settings={"sentiment": False})
+    cfg = project(tmp_path, path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    assert not (cfg.paths.output / "results_document_sentiment.tsv").exists()
+    assert "vader_compound" not in pd.read_csv(cfg.paths.output / "results_sentences.tsv", sep="\t").columns
+
+
+def test_sentiment_scores_are_cached(tmp_path, small_fw, monkeypatch):
+    from ctrlfindr import sentiment
+
+    calls = []
+    real = sentiment.score_texts
+    monkeypatch.setattr(sentiment, "score_texts", lambda texts: calls.append(len(texts)) or real(texts))
+    cfg = project(tmp_path, small_fw.path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    (tmp_path / "Text_files" / "d1.txt").write_text("Flood risk rises. The IPCC agrees. New one.", encoding="utf-8")
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    assert calls == [2, 3]  # second run used the cache; the changed document was rescored
+
+
+def test_batches_never_split_documents():
+    from ctrlfindr.analyze import _batches
+
+    counts = [("a", 3), ("b", 4), ("c", 10), ("d", 1), ("e", 1)]
+    assert _batches(counts, 5) == [("a", "a", 3), ("b", "b", 4), ("c", "c", 10), ("d", "e", 2)]
+    assert _batches(counts, 100) == [("a", "e", 19)]
+    assert _batches(counts, 1) == [(d, d, c) for d, c in counts]
+
+
+def test_stopped_analysis_keeps_previous_outputs(tmp_path, small_fw, monkeypatch):
+    from ctrlfindr import engine
+
+    (tmp_path / "Text_files").mkdir()
+    for i in range(3):
+        (tmp_path / "Text_files" / f"d{i}.txt").write_text("Flood risk rises. Calm.", encoding="utf-8")
+    cfg = config_from_dict({"paths": {"framework": str(small_fw.path)}, "analysis": {"batch_sentences": 2}},
+                           base=tmp_path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    before = {p.name: p.read_bytes() for p in cfg.paths.output.glob("results_*.tsv")}
+    real, calls = engine.analyze_sentences, {"n": 0}
+
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt
+        return real(*a, **k)
+
+    monkeypatch.setattr(analyze, "analyze_sentences", flaky)
+    with pytest.raises(KeyboardInterrupt):
+        analyze.run(cfg, show_progress=False)
+    assert {p.name: p.read_bytes() for p in cfg.paths.output.glob("results_*.tsv")} == before
+    assert not list(cfg.paths.output.glob("*.partial"))
+    with sqlite3.connect(cfg.paths.database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM results_sentences").fetchone()[0] == 6
+        assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name='results_sentences_new'").fetchone()

@@ -1,0 +1,25 @@
+# Exact versions used to produce tests/fixtures/golden_v3 and run CI.
+# Install with: pip install -r requirements.lock && pip install -e . --no-deps
+certifi==2026.10.23
+charset-normalizer==3.5.2
+colorama==0.4.6 ; sys_platform == "win32"
+defusedxml==0.7.1  # test only: lets the v2.1 reference code (legacy/) read .ods files
+et-xmlfile==2.0.0
+idna==3.20
+iniconfig==2.3.1
+numpy==2.4.6
+odfpy==1.4.1  # test only, see above
+openpyxl==3.1.5
+packaging==26.3
+pandas==3.1.0
+pluggy==1.7.0
+pyahocorasick==2.3.1
+Pygments==2.21.0
+pysbd==0.3.4
+pytest==9.2.0
+python-dateutil==4.0.0
+requests==2.34.2  # needed by vaderSentiment
+tqdm==4.70.1
+tzdata==2026.6
+urllib3==2.8.0
+vaderSentiment==3.3.2  # optional: only for frameworks with sentiment = true

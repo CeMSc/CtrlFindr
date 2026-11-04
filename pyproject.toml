@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctrlfindr"
+dynamic = ["version"]
+description = "Dictionary-based content analysis of text documents, sentence by sentence"
+readme = "README.md"
+license = "GPL-3.0-only"
+authors = [{ name = "Cesare M. Scartozzi" }]
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "pysbd>=0.3.4",
+    "pyahocorasick>=2.1",
+    "openpyxl>=3.1",
+    "tqdm>=4.60",
+]
+
+[project.optional-dependencies]
+sentiment = ["vaderSentiment>=3.3.2"]  # needed only for frameworks with sentiment = true
+test = ["pytest>=8", "vaderSentiment>=3.3.2"]
+
+[project.scripts]
+ctrlfindr = "ctrlfindr.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/CeMSc/CtrlFindr"
+
+[tool.setuptools]
+packages = ["ctrlfindr"]
+
+[tool.setuptools.dynamic]
+version = { attr = "ctrlfindr.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # warnings raised by the unmodified v2.1 reference code in legacy/
+    "ignore:invalid escape sequence:SyntaxWarning",
+    "ignore:The inplace keyword",
+]
