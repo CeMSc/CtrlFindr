@@ -132,3 +132,24 @@ def test_exclude_sentences_by_structure():
     out = exclude_sentences(df, Settings(exclude_sentence_types=("header", "table")))
     assert out["text"].tolist() == ["B"]
     assert exclude_sentences(df, Settings()) is df
+
+
+def test_window_counts_sentence_numbers_not_rows(tmp_path):
+    from ctrlfindr.engine import exclude_sentences
+
+    fw = load_framework(make_framework(tmp_path / "f.ods", [("c", "conflict")], [("w", "WINDOW(c, 1)")],
+                                       [("1", "W", "w")], settings={"sentiment": False,
+                                                                     "exclude_sentence_types": "header"}))
+    s = pd.DataFrame({"document": ["a", "a", "a", "b", "b"], "sentence_id": [1, 2, 3, 1, 2],
+                      "structure": ["body", "header", "body", "body", "body"],
+                      "text": ["Conflict rose.", "Section two", "Calm.", "Quiet.", "Conflict here."]})
+    res = analyze_sentences(exclude_sentences(s, fw.settings), fw)
+    assert res["w"].tolist() == [True, False, True, True]  # "Calm." is 2 sentences away; b is its own document
+
+
+def test_missing_sentiment_scores_are_explained(tmp_path):
+    from ctrlfindr.common import CtrlFindrError
+
+    fw = load_framework(make_framework(tmp_path / "f.ods", [("c", "conflict")], [("q", "c")], [("1", "Q", "q")]))
+    with pytest.raises(CtrlFindrError, match="no vader_compound scores"):
+        analyze_sentences(pd.DataFrame({"document": ["a"], "text": ["Conflict."]}), fw)

@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 
 from ctrlfindr import analyze, config_from_dict, ingest
-from ctrlfindr.common import ValidationError
+from ctrlfindr.common import CtrlFindrError, ValidationError
 from ctrlfindr.validation import sample
 from fwutil import make_framework
 
@@ -54,3 +54,38 @@ def test_invalid_codes_are_reported(analyzed):
         analyzed.paths.validation, sep="\t", index=False)
     with pytest.raises(ValidationError, match="invalid codes"):
         analyze.run(analyzed, show_progress=False)
+
+
+def test_codes_follow_their_sentence_after_the_document_changes(tmp_path, caplog):
+    import logging
+
+    (tmp_path / "Text_files").mkdir()
+    f = tmp_path / "Text_files" / "a.txt"
+    f.write_text("Floods hit. Calm day. Storms came. Quiet. Floods again.", encoding="utf-8")
+    fw = make_framework(tmp_path / "fw.ods", [("h", "flood*"), ("h", "storm*")], [("q", "h")], [("1", "H", "q")],
+                        settings={"sentiment": False})
+    cfg = config_from_dict({"paths": {"framework": str(fw)}}, base=tmp_path)
+    ingest.run(cfg, show_progress=False)
+    analyze.run(cfg, show_progress=False)
+    s = pd.read_csv(sample(cfg, n=2, seed=1), sep="\t", dtype=str, keep_default_na=False)
+    s["human_code"] = s["sentence"].str.contains("Flood|Storm").astype(int).astype(str)  # agrees with CtrlFindr
+    cfg.paths.validation.parent.mkdir(parents=True, exist_ok=True)
+    s.to_csv(cfg.paths.validation, sep="\t", index=False)
+    # one sentence inserted at the start and one coded sentence deleted: all numbers shift
+    f.write_text("Introduction. Floods hit. Calm day. Storms came. Floods again.", encoding="utf-8")
+    ingest.run(cfg, show_progress=False)
+    with caplog.at_level(logging.INFO, logger="ctrlfindr"):
+        analyze.run(cfg, show_progress=False)
+    rep = pd.read_csv(cfg.paths.output / "validation_report.tsv", sep="\t").iloc[0]
+    assert rep.fp == 0 and rep.fn == 0  # moved sentences are found again, nothing is misaligned
+    assert rep.coded == len(s) - int(s["sentence"].eq("Quiet.").sum())
+    assert "found under a new sentence number" in caplog.text
+    if s["sentence"].eq("Quiet.").any():
+        assert "left out because the coded sentence is no longer in its document" in caplog.text
+
+
+def test_sample_refuses_results_older_than_the_sentences(analyzed):
+    (analyzed.paths.text_files / "d.txt").write_text("Floods. Changed text.", encoding="utf-8")
+    ingest.run(analyzed, show_progress=False)
+    with pytest.raises(CtrlFindrError, match="run the analysis first"):
+        sample(analyzed, n=2)

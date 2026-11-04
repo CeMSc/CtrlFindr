@@ -73,7 +73,8 @@ excluded from the analysis. From Jupyter, use [notebooks/CtrlFindr.ipynb](notebo
 ## Text inputs
 
 CtrlFindr reads every `.txt` and `.md` file directly in the text files folder (not in
-subfolders). Each file is one document, named after the file without its extension; a
+subfolders). Hidden and temporary files whose names start with `.` or `~` (such as macOS
+`._report.txt` copies or editor lock files) are skipped. Each file is one document, named after the file without its extension; a
 `.txt` and an `.md` file with the same name are reported as a clash. Files must be UTF-8.
 
 | file | treated as | structure label of each sentence |
@@ -95,7 +96,11 @@ For Markdown files:
 
 Markdown syntax is removed before matching: emphasis markers, link targets (the link text
 stays), images, inline code backticks, HTML tags and entities, and footnote markers
-(`[^1]`, `<sup>12</sup>`, `^12^`). Horizontal rules and link definitions are dropped.
+(`[^1]`, `<sup>12</sup>`, `<sup>a</sup>`, `^12^`). Superscript ordinals and exponents are kept
+(`20<sup>th</sup>` → `20th`, `10<sup>6</sup>` → `10^6`); a number raised after letters, as
+in `km<sup>2</sup>`, cannot be told apart from a footnote marker and is removed. Horizontal
+rules and link definitions are dropped. A line starting with a number other than 1 and a
+full stop (`2020. Floods…`) inside a paragraph is wrapped text, not a list, as in CommonMark.
 
 The Markdown structure also helps the sentence splitter:
 
@@ -211,7 +216,7 @@ Functions:
 | `NOT_NEAR(a, b, n)` | some match of a has no match of b within n words. `NOT NEAR(a, b, n)` instead means no pair is near. |
 | `DOC(x)`, `DOC(x) >= n` | x is true in at least one (n) sentence(s) of the same document |
 | `DOC_SHARE(x) >= p` | x is true in at least the share p (0–1) of the document's sentences |
-| `WINDOW(x, k)` | x is true in this sentence or within k sentences before or after it, in the same document |
+| `WINDOW(x, k)` | x is true in this sentence or within k sentences before or after it, in the same document. Distances count the sentences of the document, including any left out by `exclude_sentence_types`. |
 | `COUNT(a) >= n` | a has at least n matches in the sentence |
 | `COUNT_DISTINCT(a) >= n` | at least n different terms of a match in the sentence |
 
@@ -288,6 +293,11 @@ with human judgement on real sentences:
 2. Fill `human_code` with 1 or 0 and save the file as the project's validation file
    (`[paths] validation`, default `Input/validation.tsv`).
 3. Every analysis then writes `validation_report.tsv` and `validation_disagreements.tsv`.
+
+Codes are matched to sentences by document and sentence number, and checked against the
+sentence text in the file. If a document changed and was ingested again, a coded sentence
+that moved is found under its new number. A coded sentence that is no longer in the
+document is left out and reported, never compared with a different sentence.
 
 The report gives, per variable, the confusion counts, the precision and an estimated recall.
 Flagged and unflagged sentences are sampled separately, so each stratum is weighted by its
@@ -396,6 +406,9 @@ Upgrading vaderSentiment only clears the cached sentiment scores.
 
 ## Stopping, resuming and memory
 
+- **Ingest discards outdated analysis results.** When it changes or removes documents, the
+  results table in the database is dropped, because sentence numbers may have shifted.
+  Run the analysis again before `sample`.
 - **Ingest can be stopped and resumed.** Each file is saved in its own transaction as soon
   as it is processed. If an ingest is stopped (Ctrl+C, a closed terminal, a crash or a killed
   server job), every finished file stays saved and the next `ingest` or `run` continues with

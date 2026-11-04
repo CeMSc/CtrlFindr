@@ -11,7 +11,6 @@ import unicodedata
 from collections.abc import Iterator
 from pathlib import Path
 
-import pandas as pd
 
 LOGGER_NAME = "ctrlfindr"
 log = logging.getLogger(LOGGER_NAME)
@@ -129,16 +128,3 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (_table(name),)
     ).fetchone()
     return row is not None
-
-
-def read_table(conn: sqlite3.Connection, name: str, order_by: str = "") -> pd.DataFrame:
-    sql = f'SELECT * FROM "{_table(name)}"'
-    if order_by:
-        if not re.fullmatch(r"[a-z_]+(, [a-z_]+)*", order_by):
-            raise ValueError(f"invalid ORDER BY {order_by!r}")
-        sql += f" ORDER BY {order_by}"
-    return pd.read_sql_query(sql, conn)
-
-
-def write_table(conn: sqlite3.Connection, df: pd.DataFrame, name: str) -> None:
-    df.to_sql(_table(name), conn, if_exists="replace", index=False)

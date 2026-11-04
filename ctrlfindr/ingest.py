@@ -29,8 +29,8 @@ from importlib import metadata
 from pathlib import Path
 
 from . import __version__
-from .common import (DOCUMENTS, META, SENTENCES, SENTIMENT, CtrlFindrError, ValidationError, connect,
-                     normalize_text, sha256_file)
+from .common import (DOCUMENTS, META, RESULTS, RESULTS_NEW, SENTENCES, SENTIMENT, CtrlFindrError, ValidationError,
+                     connect, normalize_text, sha256_file, table_exists)
 from .config import Config
 from .markdown import blocks as markdown_blocks
 
@@ -88,11 +88,18 @@ class Sentence:
 
 
 def discover(text_dir: Path) -> list[SourceFile]:
-    """Sorted list of the .txt and .md files in ``text_dir`` (extensions in any case)."""
+    """Sorted list of the .txt and .md files in ``text_dir`` (extensions in any case).
+
+    Hidden and temporary files (names starting with ``.`` or ``~``, such as macOS
+    ``._report.txt`` copies or editor lock files) are skipped.
+    """
     if not text_dir.is_dir():
         raise CtrlFindrError(f"text files folder not found: {text_dir}")
-    files = sorted((p for p in text_dir.iterdir() if p.is_file() and p.suffix.lower() in SUFFIXES),
-                   key=lambda p: p.name)
+    candidates = [p for p in text_dir.iterdir() if p.is_file() and p.suffix.lower() in SUFFIXES]
+    skipped = [p for p in candidates if p.name.startswith((".", "~"))]
+    if skipped:
+        log.info("Skipped %d hidden or temporary file(s), e.g. %s", len(skipped), skipped[0].name)
+    files = sorted((p for p in candidates if p not in skipped), key=lambda p: p.name)
     if not files:
         raise CtrlFindrError(f"no .txt or .md files in {text_dir}")
     out = [SourceFile(p.name[: -len(p.suffix)], p) for p in files]
@@ -223,16 +230,12 @@ def _prepare_db(conn: sqlite3.Connection, signature: str) -> dict[str, str]:
     if rebuild:
         if stored is not None or columns(DOCUMENTS):
             log.info("Ingest settings or versions changed: rebuilding the database")
-        for table in (SENTIMENT, SENTENCES, DOCUMENTS, META):
+        for table in (RESULTS, RESULTS_NEW, SENTIMENT, SENTENCES, DOCUMENTS, META):
             conn.execute(f"DROP TABLE IF EXISTS {table}")
     for ddl in _SCHEMA:
         conn.execute(ddl)
     conn.execute(f"INSERT OR REPLACE INTO {META} (key, value) VALUES ('ingest_signature', ?)", (signature,))
     return dict(conn.execute(f"SELECT document, sha256 FROM {DOCUMENTS}").fetchall())
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
 
 def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
@@ -269,7 +272,7 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
             log.warning("%d file(s) are not valid UTF-8; unreadable bytes were replaced: %s",
                         len(bad), "; ".join(bad[:5]) + (" ..." if len(bad) > 5 else ""))
 
-        cached_sentiment = _table_exists(conn, SENTIMENT)
+        cached_sentiment = table_exists(conn, SENTIMENT)
 
         def forget(d: str) -> None:
             conn.execute(f"DELETE FROM {SENTENCES} WHERE document=?", (d,))
@@ -279,6 +282,10 @@ def run(cfg: Config, show_progress: bool = True) -> dict[str, int]:
 
         for d in removed:
             forget(d)
+        if removed or todo:
+            # the previous analysis no longer matches the sentences (sentence numbers may shift)
+            conn.execute(f"DROP TABLE IF EXISTS {RESULTS}")
+            conn.execute(f"DROP TABLE IF EXISTS {RESULTS_NEW}")
         for d, f in files.items():  # files may have moved; keep paths current
             conn.execute(f"UPDATE {DOCUMENTS} SET path=? WHERE document=?", (str(f.path), d))
         conn.commit()  # settings check, removals and paths are saved before the long part

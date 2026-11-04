@@ -87,10 +87,6 @@ def parse_term(text: str) -> Term:
     return Term(text, regex, literal, kind)
 
 
-def term_regex(text: str) -> re.Pattern[str]:
-    return parse_term(text).regex
-
-
 @dataclass
 class ListSpec:
     """A list of the taxonomy: positive terms plus optional exclusions."""

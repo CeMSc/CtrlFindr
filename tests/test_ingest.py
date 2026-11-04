@@ -197,3 +197,23 @@ def test_changed_file_keeps_old_version_until_reprocessed(tmp_path, monkeypatch)
     with pytest.raises(KeyboardInterrupt):
         ingest.run(cfg, show_progress=False)
     assert [r[4] for r in sentences(cfg)] == ["Old text."]  # never half-replaced
+
+
+def test_hidden_and_temporary_files_are_skipped(tmp_path):
+    cfg = project(tmp_path, {"a.txt": b"Real text.", "._a.txt": b"\x00\x05\xff binary", "~$draft.md": b"lock"})
+    ingest.run(cfg, show_progress=False)
+    assert {r[0] for r in sentences(cfg)} == {"a"}
+
+
+def test_ingest_discards_results_that_no_longer_match(tmp_path):
+    cfg = project(tmp_path, {"a.txt": b"One. Two."})
+    ingest.run(cfg, show_progress=False)
+    with sqlite3.connect(cfg.paths.database) as conn:
+        conn.execute("CREATE TABLE results_sentences (x)")
+    ingest.run(cfg, show_progress=False)  # nothing changed: results kept
+    with sqlite3.connect(cfg.paths.database) as conn:
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='results_sentences'").fetchone()
+    (cfg.paths.text_files / "a.txt").write_bytes(b"One. Two. Three.")
+    ingest.run(cfg, show_progress=False)
+    with sqlite3.connect(cfg.paths.database) as conn:
+        assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name='results_sentences'").fetchone()

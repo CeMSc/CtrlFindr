@@ -11,7 +11,8 @@ Each block is ``(structure, text)`` with structure one of:
 
 Markdown syntax is removed from the text: emphasis markers, link targets (the link text is
 kept), images, inline code backticks, footnote markers (``[^1]``, ``<sup>12</sup>``,
-``^12^``), HTML tags and entities, and backslash escapes. Horizontal rules are dropped.
+``^12^``; superscript ordinals and exponents are kept as ``20th`` and ``10^6``), HTML tags
+and entities, and backslash escapes. Horizontal rules are dropped.
 """
 
 from __future__ import annotations
@@ -35,8 +36,14 @@ _INLINE = [
     (re.compile(r"!\[[^\]]*\]\([^)]*\)"), ""),                    # images
     (re.compile(r"!\[[^\]]*\]\[[^\]]*\]"), ""),
     (re.compile(r"\[\^[^\]]+\]"), ""),                             # footnote markers [^1]
-    (re.compile(r"<sup>\s*[\w,;\-–*†‡ ]{1,12}\s*</sup>", re.I), ""),  # footnote markers <sup>12</sup>
-    (re.compile(r"\^[\w,\-–*†‡]{1,12}\^"), ""),                     # footnote markers ^12^ (pandoc)
+    # superscripts (<sup>..</sup> and pandoc ^..^): ordinals are joined ("20th"), a number
+    # raised after a digit is an exponent ("10^6"), other number/symbol marks are footnote
+    # markers and removed; superscripts with other text keep their text
+    (re.compile(r"<sup>\s*(st|nd|rd|th)\s*</sup>|\^(st|nd|rd|th)\^", re.I), r"\1\2"),
+    (re.compile(r"(?<=\d)(?:<sup>\s*(\d{1,3})\s*</sup>|\^(\d{1,3})\^)", re.I), r"^\1\2"),
+    (re.compile(r"<sup>\s*[\d,;\-–*†‡ ]{1,12}\s*</sup>|\^[\d,\-–*†‡]{1,12}\^", re.I), ""),
+    (re.compile(r"<sup>\s*[a-z](\s*,\s*[a-z])*\s*</sup>", re.I), ""),     # letter footnote markers <sup>a</sup>
+    (re.compile(r"<sup>(.*?)</sup>", re.I), r"\1"),
     (re.compile(r"\[([^\]]+)\]\([^)]*\)"), r"\1"),                 # [text](url)
     (re.compile(r"\[([^\]]+)\]\[[^\]]*\]"), r"\1"),                # [text][ref]
     (re.compile(r"<(https?://|www\.)[^>]+>"), ""),                 # <http://autolink>
@@ -159,6 +166,8 @@ def blocks(text: str) -> list[tuple[str, str]]:
             i += 1
             continue
         m = _ITEM.match(line)
+        if m and para and item is None and m.group(2)[0].isdigit() and int(m.group(2)[:-1]) != 1:
+            m = None  # "2020. Floods..." inside a paragraph is wrapped text, not a list (CommonMark)
         if m:
             flush_para()
             flush_item()

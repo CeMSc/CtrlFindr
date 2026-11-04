@@ -45,3 +45,16 @@ def test_inline_markup_is_removed():
         "Bold and it and em but snake_case_name, code, gone"
     assert inline_text("See [the IPCC](https://ipcc.ch)[^2] ![fig](f.png) <b>now</b> &amp; \\*literal\\*") == \
         "See the IPCC now & *literal*"
+
+
+def test_a_year_at_the_start_of_a_wrapped_line_stays_in_the_paragraph():
+    assert blocks("Temperatures rose between 2015 and\n2020. Floods followed.") == [
+        ("body", "Temperatures rose between 2015 and 2020. Floods followed.")]
+    assert blocks("Steps:\n1. Plan\n2. Act") == [("body", "Steps:"), ("list", "Plan"), ("list", "Act")]
+
+
+def test_superscripts():
+    assert inline_text("the 20<sup>th</sup> century and the 21^st^") == "the 20th century and the 21st"
+    assert inline_text("10<sup>6</sup> people, 10^9^ tonnes") == "10^6 people, 10^9 tonnes"
+    assert inline_text("agreed.<sup>12</sup> Notes<sup>a, b</sup> and a <sup>Registered</sup> mark") == \
+        "agreed. Notes and a Registered mark"

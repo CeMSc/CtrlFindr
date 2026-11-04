@@ -44,7 +44,10 @@ def sentiment_flags(compound: np.ndarray, settings: Settings) -> dict[str, np.nd
 class Evaluator:
     """Holds the per-sentence columns and evaluates expressions over them."""
 
-    def __init__(self, fw: Framework, text: list[str], documents: np.ndarray):
+    def __init__(self, fw: Framework, text: list[str], documents: np.ndarray, positions: np.ndarray | None = None):
+        """``positions``: sentence numbers within each document (sentence_id). WINDOW measures
+        distances with them, so sentences left out (exclude_sentence_types) still count as
+        being in between. Without them, the row order is used."""
         self.fw = fw
         self.text = text
         self.n = len(text)
@@ -62,6 +65,11 @@ class Evaluator:
             last = np.r_[first[1:], self.n] - 1
             run = np.repeat(np.arange(len(first)), np.diff(np.r_[first, self.n]))
             self.doc_first, self.doc_last = first[run], last[run]
+            pos = np.arange(self.n) if positions is None else np.asarray(positions, dtype=np.int64)
+            same_doc = codes[1:] == codes[:-1]
+            if np.any(np.diff(pos)[same_doc] <= 0):
+                raise CtrlFindrError("sentence numbers must increase within each document")
+            self.pos = pos
 
     # ------------------------------------------------------------------ helpers
 
@@ -121,10 +129,13 @@ class Evaluator:
             k = node.args[1]
             if not self.n:
                 return out
+            # rows of the same document within k sentence numbers: search a key that keeps
+            # documents apart (gap larger than any position plus k)
+            span = int(self.pos.max() - self.pos.min()) + k + 1
+            key = self.doc.astype(np.int64) * span + (self.pos - self.pos.min())
+            lo = np.maximum(np.searchsorted(key, key - k, side="left"), self.doc_first)
+            hi = np.minimum(np.searchsorted(key, key + k, side="right") - 1, self.doc_last)
             cs = np.r_[0, np.cumsum(inner)]
-            idx = np.arange(self.n)
-            lo = np.maximum(idx - k, self.doc_first)
-            hi = np.minimum(idx + k, self.doc_last)
             return (cs[hi + 1] - cs[lo]) > 0
         cmp = _COMPARE[node.op]
         if f == "doc":
@@ -217,7 +228,8 @@ def analyze_sentences(
     sentences = sentences.reset_index(drop=True)
     text = [normalize_text(t).lower() for t in sentences["text"].fillna("").astype(str)]
     n = len(text)
-    ev = Evaluator(fw, text, sentences["document"].to_numpy())
+    positions = sentences["sentence_id"].to_numpy() if "sentence_id" in sentences else None
+    ev = Evaluator(fw, text, sentences["document"].to_numpy(), positions)
 
     matcher = matcher or Matcher(fw.all_lists)
     needed = {name for lists in fw.set_lists.values() for name in lists}
@@ -232,9 +244,13 @@ def analyze_sentences(
 
     compound = None
     if fw.settings.sentiment:
+        if "vader_compound" not in sentences:
+            raise CtrlFindrError("sentiment = true, but the sentences have no vader_compound scores; analyze.run "
+                                 "adds them (or pass them in a vader_compound column)")
         compound = pd.to_numeric(sentences["vader_compound"], errors="coerce").to_numpy(float)
         if np.isnan(compound).any():
-            raise CtrlFindrError("some sentences have no sentiment score; run the ingest step again")
+            raise CtrlFindrError("some sentences have no vader_compound score; analyze.run computes them "
+                                 "when sentiment = true")
         ev.columns.update(sentiment_flags(compound, fw.settings))
 
     by_name = {qq.name: qq for qq in fw.queries}

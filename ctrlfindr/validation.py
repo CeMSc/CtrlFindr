@@ -18,7 +18,10 @@ estimated by weighting each stratum by its size in the corpus:
     recall    = TP_est / (TP_est + FN_est)
 
 This assumes the coded sentences were drawn at random within each stratum, as ``sample``
-does. Coded sentences are matched to the current results by document and sentence_id.
+does. Coded sentences are matched to the current results by document and sentence_id, and
+their ``sentence`` text is checked against the current sentence: if a document was edited
+and ingested again, sentence numbers shift, and such codes are left out (and reported)
+rather than compared with a different sentence.
 """
 
 from __future__ import annotations
@@ -29,7 +32,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .common import DOCUMENTS, RESULTS, SENTENCES, CtrlFindrError, ValidationError, connect, table_exists
+from .common import (DOCUMENTS, RESULTS, SENTENCES, CtrlFindrError, ValidationError, collapse_ws, connect,
+                     normalize_text, table_exists)
 from .config import Config
 from .framework import Framework, load_framework
 
@@ -93,6 +97,11 @@ def sample(cfg: Config, n: int = 50, targets: list[str] | None = None, seed: int
     return path
 
 
+def _comparable(text: str) -> str:
+    """Sentence text in the form used for comparison (as in results_sentences.tsv)."""
+    return collapse_ws(normalize_text(str(text))).lower()
+
+
 def _code(value) -> int | None:
     v = str(value).strip().lower()
     return 1 if v in ("1", "true", "yes", "y") else 0 if v in ("0", "false", "no", "n") else None
@@ -123,8 +132,11 @@ class ValidationCollector:
         coded["column"] = [_target_column(fw, t) for t in coded["variable"]]
         if "sentence" not in coded:
             coded["sentence"] = ""
+        coded["check"] = [_comparable(t) for t in coded["sentence"]]
         self.coded = coded
         self.pred: dict[int, bool] = {}  # row of `coded` -> CtrlFindr's value
+        self.mismatched: list[int] = []  # rows whose sentence cannot be found any more
+        self.moved = 0  # rows found again under a new sentence number
         self.flagged = {c: 0 for c in coded["column"].unique()}
         self.total = 0
 
@@ -137,12 +149,34 @@ class ValidationCollector:
         if mine.empty:
             return
         key = results.set_index(["document", "sentence_id"])
-        for row, d, i, c in zip(mine.index, mine["document"], mine["sentence_id"], mine["column"]):
-            if (d, i) in key.index:
+        # where each sentence text occurs now (to find coded sentences whose number changed)
+        by_text: dict[tuple[str, str], list[int]] = {}
+        for d, i, t in zip(results["document"], results["sentence_id"], results["sentences"]):
+            by_text.setdefault((d, _comparable(t)), []).append(i)
+        for row, d, i, c, text in zip(mine.index, mine["document"], mine["sentence_id"], mine["column"], mine["check"]):
+            if (d, i) in key.index and (not text or _comparable(key.at[(d, i), "sentences"]) == text):
                 self.pred[row] = bool(key.at[(d, i), c])
+            elif text and len(by_text.get((d, text), [])) == 1:  # same sentence, new number
+                self.pred[row] = bool(key.at[(d, by_text[(d, text)][0]), c])
+                self.moved += 1
+            elif text or (d, i) in key.index:
+                self.mismatched.append(row)
 
     def finish(self, out_dir: Path) -> dict:
         """Write validation_report.tsv and validation_disagreements.tsv."""
+        if self.mismatched:
+            rows = ", ".join(str(r + 2) for r in self.mismatched[:10]) + (" ..." if len(self.mismatched) > 10 else "")
+            log.warning("Validation: %d coded sentence(s) left out because the coded sentence is no longer in "
+                        "its document (the document changed since the sample was drawn); rows %s of %s. "
+                        "Draw and code a new sample for those documents.",
+                        len(self.mismatched), rows, self.path.name)
+        if self.moved:
+            log.info("Validation: %d coded sentence(s) were found under a new sentence number "
+                     "(their document changed) and are used there", self.moved)
+        unverified = int((self.coded.loc[sorted(self.pred), "check"] == "").sum()) if self.pred else 0
+        if unverified:
+            log.warning("Validation: %d coded sentence(s) have no sentence text, so it cannot be checked that "
+                        "they still refer to the same sentence", unverified)
         report, disagreements = [], []
         coded = self.coded.loc[sorted(self.pred)]
         for target, grp in coded.groupby("variable", sort=False):
@@ -176,11 +210,6 @@ class ValidationCollector:
                               lineterminator="\n")
         coded_n = int(rep["coded"].sum()) if len(rep) else 0
         log.info("Validation: %d coded sentences for %d target(s); see validation_report.tsv", coded_n, len(rep))
-        return {"file": str(self.path), "targets": len(rep), "coded_sentences": coded_n}
+        return {"file": str(self.path), "targets": len(rep), "coded_sentences": coded_n,
+                "left_out_changed": len(self.mismatched), "found_under_new_number": self.moved}
 
-
-def validation_report(path: Path, results: pd.DataFrame, fw: Framework, out_dir: Path) -> dict:
-    """Compare hand codes with a complete results table (one batch)."""
-    collector = ValidationCollector(path, fw)
-    collector.add(results)
-    return collector.finish(out_dir)

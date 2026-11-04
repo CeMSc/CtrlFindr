@@ -194,9 +194,12 @@ def run(cfg: Config, show_progress: bool = True, run_tests_first: bool = True) -
                     bar.update(n)
             if n_sentences == 0:
                 raise CtrlFindrError("every sentence is excluded by exclude_sentence_types in the settings sheet")
-            # Replace the previous results only now that the run is complete.
+            # Replace the previous results only now that the run is complete, in one transaction
+            # (sqlite3 would otherwise run each of these statements on its own).
+            conn.execute("BEGIN")
             conn.execute(f"DROP TABLE IF EXISTS {RESULTS}")
             conn.execute(f"ALTER TABLE {RESULTS_NEW} RENAME TO {RESULTS}")
+            conn.commit()
         except BaseException:
             conn.rollback()
             conn.execute(f"DROP TABLE IF EXISTS {RESULTS_NEW}")
